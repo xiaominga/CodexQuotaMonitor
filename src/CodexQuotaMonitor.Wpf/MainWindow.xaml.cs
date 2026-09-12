@@ -37,6 +37,11 @@ public partial class MainWindow : Window
     private bool _menuVisible;
     private bool _mouseButtonWasDown;
     private bool _isExiting;
+    private bool _isDragging;
+    private System.Drawing.Point _dragStart;
+    private NativeMethods.RECT _dragRect;
+    private readonly Border _fiveHourSeparator;
+    private bool _showFiveHour = true;
 
     public MainWindow(AppPaths paths, CliOptions options, AppSettings settings, SimpleLogger logger)
     {
@@ -55,9 +60,13 @@ public partial class MainWindow : Window
         _quota5h = AddGaugeBlock("5H", 0);
         _quotaWeek = AddGaugeBlock("WK", 1);
         _refreshStatus = AddRefreshBlock(2);
-        AddSeparator(0);
+        _fiveHourSeparator = AddSeparator(0);
         AddSeparator(1);
 
+        MouseLeftButtonDown += BeginDrag;
+        MouseMove += MoveDrag;
+        MouseLeftButtonUp += (_, _) => EndDrag();
+        LostMouseCapture += (_, _) => EndDrag();
         BuildMenu();
         SetupTray();
         ConfigureTimers();
@@ -83,7 +92,7 @@ public partial class MainWindow : Window
         return block;
     }
 
-    private void AddSeparator(int column)
+    private Border AddSeparator(int column)
     {
         var separator = new Border
         {
@@ -96,6 +105,7 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(separator, column);
         RootGrid.Children.Add(separator);
+        return separator;
     }
 
     private void ConfigureTimers()
@@ -109,7 +119,7 @@ public partial class MainWindow : Window
         _topmostTimer.Start();
 
         _placementTimer.Interval = TimeSpan.FromSeconds(1);
-        _placementTimer.Tick += (_, _) => SnapToTaskbar();
+        _placementTimer.Tick += (_, _) => ApplyPlacement();
         _placementTimer.Start();
 
         _menuDismissTimer.Interval = TimeSpan.FromMilliseconds(15);
@@ -135,7 +145,13 @@ public partial class MainWindow : Window
         };
         _menu.AutoClose = true;
         _menu.Items.Add("Refresh now", null, (_, _) => RefreshNow());
-        _menu.Items.Add("Snap to taskbar left", null, (_, _) => SnapToTaskbar());
+        _menu.Items.Add("Reset position to bottom right", null, (_, _) =>
+        {
+            _settings.WindowX = null;
+            _settings.WindowY = null;
+            SettingsStore.Save(_paths.SettingsPath, _settings, _logger);
+            ApplyPlacement();
+        });
         _menu.Items.Add(new Forms.ToolStripMenuItem(_settings.NoTray ? "Tray icon: off" : "Tray icon: on") { Enabled = false });
         _menu.Items.Add(new Forms.ToolStripSeparator());
 
@@ -171,7 +187,7 @@ public partial class MainWindow : Window
         {
             if (args.Button == Forms.MouseButtons.Left)
             {
-                SnapToTaskbar();
+                ApplyPlacement();
                 ForceTopmost();
                 RefreshNow();
             }
@@ -180,7 +196,7 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        Dispatcher.BeginInvoke(SnapToTaskbar, DispatcherPriority.ApplicationIdle);
+        Dispatcher.BeginInvoke(ApplyPlacement, DispatcherPriority.ApplicationIdle);
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -191,7 +207,7 @@ public partial class MainWindow : Window
         {
             _logger.Warning("native frosted backdrop is unavailable; using translucent WPF fallback");
         }
-        SnapToTaskbar();
+        ApplyPlacement();
         ForceTopmost();
     }
 
@@ -380,6 +396,17 @@ public partial class MainWindow : Window
 
     private void Render()
     {
+        var showFiveHour = TaskbarPlacementCalculator.ShowFiveHour(_lastQuota);
+        if (_showFiveHour != showFiveHour)
+        {
+            _showFiveHour = showFiveHour;
+            _quota5h.Visibility = _fiveHourSeparator.Visibility =
+                showFiveHour ? Visibility.Visible : Visibility.Collapsed;
+            RootGrid.ColumnDefinitions[0].Width = showFiveHour
+                ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+            _quotaWeek.Margin = new Thickness(showFiveHour ? 3 : 0, 0, 2, 0);
+            ApplyPlacement();
+        }
         RenderQuota();
         RenderRefreshStatus();
         UpdateTitle();
@@ -486,7 +513,7 @@ public partial class MainWindow : Window
 
     private void ForceTopmost()
     {
-        if (_menuVisible)
+        if (_menuVisible || _isDragging)
         {
             return;
         }
@@ -499,44 +526,68 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SnapToTaskbar()
+    private void BeginDrag(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        var placement = ResolveTaskbarPlacement(_settings.WindowWidth);
-        if (_hwnd == IntPtr.Zero)
+        if (_menuVisible || !NativeMethods.GetWindowRect(_hwnd, out _dragRect)) return;
+        _dragStart = Forms.Control.MousePosition;
+        _isDragging = CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void MoveDrag(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_isDragging) return;
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
         {
-            Left = placement.X;
-            Top = placement.Y;
+            EndDrag();
             return;
         }
+        var cursor = Forms.Control.MousePosition;
+        NativeMethods.SetTopmostPosition(_hwnd,
+            _dragRect.Left + cursor.X - _dragStart.X,
+            _dragRect.Top + cursor.Y - _dragStart.Y,
+            _dragRect.Width, _dragRect.Height);
+    }
 
+    private void EndDrag()
+    {
+        if (!_isDragging) return;
+        _isDragging = false;
+        ReleaseMouseCapture();
+        if (NativeMethods.GetWindowRect(_hwnd, out var rect))
+        {
+            _settings.WindowX = rect.Left;
+            _settings.WindowY = rect.Top;
+            ApplyPlacement();
+            if (NativeMethods.GetWindowRect(_hwnd, out rect))
+            {
+                _settings.WindowX = rect.Left;
+                _settings.WindowY = rect.Top;
+            }
+            SettingsStore.Save(_paths.SettingsPath, _settings, _logger);
+        }
+    }
+
+    private void ApplyPlacement()
+    {
+        if (_isDragging) return;
+        var width = TaskbarPlacementCalculator.DisplayWidth(_settings.WindowWidth, _showFiveHour);
+        var placement = ResolveTaskbarPlacement(width, _settings.WindowX, _settings.WindowY);
+        if (_hwnd == IntPtr.Zero) return;
         if (NativeMethods.GetWindowRect(_hwnd, out var current) &&
             current.Left == placement.X && current.Top == placement.Y &&
             current.Width == placement.Width && current.Height == placement.Height)
-        {
             return;
-        }
-
         NativeMethods.SetTopmostPosition(_hwnd, placement.X, placement.Y, placement.Width, placement.Height);
     }
 
-    public static TaskbarPlacement ResolveTaskbarPlacement(int preferredWidth)
+    public static TaskbarPlacement ResolveTaskbarPlacement(int preferredWidth, int? x = null, int? y = null)
     {
-        var bounds = Forms.Screen.PrimaryScreen?.Bounds ?? new System.Drawing.Rectangle(
-            0,
-            0,
-            (int)SystemParameters.PrimaryScreenWidth,
-            (int)SystemParameters.PrimaryScreenHeight);
-        if (NativeMethods.TryGetTaskbarRect(out var edge, out var rect))
-        {
-            return TaskbarPlacementCalculator.Compute(
-                edge,
-                rect,
-                preferredWidth,
-                Constants.DefaultHeight,
-                bounds.Width,
-                bounds.Height);
-        }
-
-        return TaskbarPlacementCalculator.Fallback(preferredWidth, Constants.DefaultHeight, bounds.Width, bounds.Height);
+        var screen = x.HasValue && y.HasValue
+            ? Forms.Screen.FromPoint(new System.Drawing.Point(x.Value, y.Value))
+            : Forms.Screen.PrimaryScreen;
+        var area = screen?.WorkingArea ?? new System.Drawing.Rectangle(
+            0, 0, (int)SystemParameters.PrimaryScreenWidth, (int)SystemParameters.PrimaryScreenHeight);
+        return TaskbarPlacementCalculator.InWorkingArea(area, preferredWidth, Constants.DefaultHeight, x, y);
     }
 }

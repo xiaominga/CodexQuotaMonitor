@@ -20,11 +20,19 @@ public sealed class AppSettings
     [JsonPropertyName("amber_threshold")]
     public double AmberThreshold { get; set; } = Constants.DefaultAmberThreshold;
 
+    [JsonPropertyName("window_x")]
+    public int? WindowX { get; set; }
+
+    [JsonPropertyName("window_y")]
+    public int? WindowY { get; set; }
+
     public AppSettings Clone() => new()
     {
         QuotaInterval = QuotaInterval,
         NoTray = NoTray,
         WindowWidth = WindowWidth,
+        WindowX = WindowX,
+        WindowY = WindowY,
         RedThreshold = RedThreshold,
         AmberThreshold = AmberThreshold
     };

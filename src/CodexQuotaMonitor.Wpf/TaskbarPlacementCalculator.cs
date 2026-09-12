@@ -2,6 +2,24 @@ namespace CodexQuotaMonitor.Wpf;
 
 public static class TaskbarPlacementCalculator
 {
+    // Coordinates and sizes are physical pixels, including negative monitor origins.
+    public static TaskbarPlacement InWorkingArea(
+        System.Drawing.Rectangle area, int width, int height, int? x = null, int? y = null)
+    {
+        width = Math.Clamp(width, 1, Math.Max(1, area.Width));
+        height = Math.Clamp(height, 1, Math.Max(1, area.Height));
+        return new TaskbarPlacement(
+            Math.Clamp(x ?? area.Right - width - 10, area.Left, area.Right - width),
+            Math.Clamp(y ?? area.Bottom - height - 10, area.Top, area.Bottom - height),
+            width, height);
+    }
+
+    public static bool ShowFiveHour(QuotaSnapshot? lastValidQuota) =>
+        lastValidQuota is null || lastValidQuota.Error is not null || lastValidQuota.FiveHour is not null;
+
+    public static int DisplayWidth(int fullWidth, bool showFiveHour) =>
+        showFiveHour ? fullWidth : (int)Math.Round(fullWidth * 2.08 / 3.08);
+
     private const uint EdgeLeft = 0;
     private const uint EdgeTop = 1;
     private const uint EdgeRight = 2;

@@ -1,3 +1,12 @@
+## 本地修改：浮窗位置与额度列
+
+- 默认显示在主屏工作区右下角，与右边和下边各留 10 像素，避开任务栏。
+- 按住鼠标左键拖动浮窗，松开后自动保存位置；重启后恢复。屏幕断开或分辨率变化时会限制在可见工作区。
+- 右键选择 **Reset position to bottom right**，清除保存的位置并恢复默认位置。
+- 成功查询且 fiveHour 为空时隐藏 5H 列，同时收窄窗口；后续返回 5H 时自动恢复。查询失败保留上次有效数据与列布局。
+- settings.json 新增可选的 window_x、window_y（屏幕物理像素坐标）；两者为空时使用默认位置。window_width 仍代表三列宽度。
+- 以下上游说明与截图中的“任务栏左侧贴靠”和“5H inactive”行为已被本节替代。
+
 <div align="center">
   <img src="assets/app-icon.png" alt="Codex 用量监控图标" width="96" height="96">
   <h1>Codex 用量监控</h1>

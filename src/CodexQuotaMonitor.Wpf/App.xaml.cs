@@ -116,7 +116,7 @@ public partial class App : System.Windows.Application
         Console.WriteLine($"codex_exe={(string.IsNullOrWhiteSpace(codexExe) ? "not found" : codexExe)}");
         Console.WriteLine($"quota_interval={settings.QuotaInterval}");
         Console.WriteLine($"tray={(!settings.NoTray)}");
-        var placement = CodexQuotaMonitor.Wpf.MainWindow.ResolveTaskbarPlacement(settings.WindowWidth);
+        var placement = CodexQuotaMonitor.Wpf.MainWindow.ResolveTaskbarPlacement(settings.WindowWidth, settings.WindowX, settings.WindowY);
         Console.WriteLine($"placement={placement.X},{placement.Y},{placement.Width}x{placement.Height}");
         if (NativeMethods.TryGetTaskbarRect(out var edge, out var rect))
         {
@@ -158,7 +158,7 @@ public partial class App : System.Windows.Application
             NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOWNOACTIVATE);
             NativeMethods.ApplyOverlayStyles(hwnd);
             NativeMethods.EnableFrostedBackdrop(hwnd);
-            var placement = CodexQuotaMonitor.Wpf.MainWindow.ResolveTaskbarPlacement(settings.WindowWidth);
+            var placement = CodexQuotaMonitor.Wpf.MainWindow.ResolveTaskbarPlacement(settings.WindowWidth, settings.WindowX, settings.WindowY);
             NativeMethods.SetTopmostPosition(hwnd, placement.X, placement.Y, placement.Width, placement.Height);
             NativeMethods.SetTopmostNoActivate(hwnd);
             return true;

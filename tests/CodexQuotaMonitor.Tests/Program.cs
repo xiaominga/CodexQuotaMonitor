@@ -8,6 +8,7 @@ var tests = new (string Name, Action Body)[]
     ("settings defaults, JSON load, CLI override, corrupt fallback", TestSettings),
     ("formatting helpers", TestFormatting),
     ("taskbar overlay placement", TestTaskbarPlacement),
+    ("floating placement and adaptive columns", TestFloatingLayout),
     ("argument handling", TestArguments)
 };
 
@@ -110,6 +111,15 @@ static void TestSettings()
         Equal(300, merged.QuotaInterval, "cli quota override");
         Equal(false, merged.NoTray, "cli tray override");
 
+        merged.WindowX = -1800;
+        merged.WindowY = 120;
+        SettingsStore.Save(path, merged);
+        var restored = SettingsStore.Load(path);
+        Equal<int?>(-1800, restored.WindowX, "saved negative monitor coordinate");
+        Equal<int?>(120, restored.WindowY, "saved vertical position");
+        var overridden = SettingsStore.ApplyCliOverrides(restored, cli);
+        Equal(restored.WindowX, overridden.WindowX, "CLI preserves position");
+
         File.WriteAllText(path, "{ broken json");
         var fallback = SettingsStore.Load(path);
         Equal(180, fallback.QuotaInterval, "corrupt JSON fallback");
@@ -141,6 +151,30 @@ static void TestTaskbarPlacement()
     var verticalRect = new NativeMethods.RECT { Left = 0, Top = 0, Right = 48, Bottom = 1080 };
     var vertical = TaskbarPlacementCalculator.Compute(0, verticalRect, 260, 48, 1920, 1080);
     Equal(new TaskbarPlacement(0, 1032, 260, 48), vertical, "vertical taskbar fallback");
+}
+
+static void TestFloatingLayout()
+{
+    var area = new System.Drawing.Rectangle(0, 0, 1920, 1032);
+    Equal(new TaskbarPlacement(1650, 974, 260, 48),
+        TaskbarPlacementCalculator.InWorkingArea(area, 260, 48), "default avoids taskbar");
+    Equal(new TaskbarPlacement(100, 200, 260, 48),
+        TaskbarPlacementCalculator.InWorkingArea(area, 260, 48, 100, 200), "custom location");
+    Equal(new TaskbarPlacement(1660, 984, 260, 48),
+        TaskbarPlacementCalculator.InWorkingArea(area, 260, 48, 4000, 2000), "removed monitor recovery");
+    Equal(new TaskbarPlacement(-270, 974, 260, 48),
+        TaskbarPlacementCalculator.InWorkingArea(new(-1920, 0, 1920, 1032), 260, 48),
+        "negative monitor origin");
+    Equal(false, TaskbarPlacementCalculator.ShowFiveHour(
+        new QuotaSnapshot(PlanType: "prolite", Weekly: new LimitWindow("Week", 86, 14, 10080))),
+        "weekly-only hides 5H");
+    Equal(true, TaskbarPlacementCalculator.ShowFiveHour(null), "initial loading is not absence");
+    Equal(true, TaskbarPlacementCalculator.ShowFiveHour(new QuotaSnapshot(Error: "timeout")),
+        "initial failure is not absence");
+    Equal(true, TaskbarPlacementCalculator.ShowFiveHour(
+        new QuotaSnapshot(FiveHour: new LimitWindow("5h"))), "5H returns");
+    Equal(176, TaskbarPlacementCalculator.DisplayWidth(260, false), "compact width");
+    Equal(260, TaskbarPlacementCalculator.DisplayWidth(260, true), "full width");
 }
 
 static void TestArguments()
