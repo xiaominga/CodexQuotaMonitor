@@ -38,10 +38,9 @@ public partial class MainWindow : Window
     private bool _mouseButtonWasDown;
     private bool _isExiting;
     private bool _isDragging;
-    private System.Drawing.Point _dragStart;
-    private NativeMethods.RECT _dragRect;
     private readonly Border _fiveHourSeparator;
     private bool _showFiveHour = true;
+    private readonly List<Forms.ToolStripMenuItem> _scaleItems = new();
 
     public MainWindow(AppPaths paths, CliOptions options, AppSettings settings, SimpleLogger logger)
     {
@@ -64,9 +63,6 @@ public partial class MainWindow : Window
         AddSeparator(1);
 
         MouseLeftButtonDown += BeginDrag;
-        MouseMove += MoveDrag;
-        MouseLeftButtonUp += (_, _) => EndDrag();
-        LostMouseCapture += (_, _) => EndDrag();
         BuildMenu();
         SetupTray();
         ConfigureTimers();
@@ -164,6 +160,22 @@ public partial class MainWindow : Window
             _quotaIntervalItems.Add(item);
         }
         _menu.Items.Add(quotaMenu);
+        var scaleMenu = new Forms.ToolStripMenuItem("Scale");
+        foreach (var percent in new[] { 50, 75, 100, 125, 150, 175, 200, 250, 300 })
+        {
+            var scale = percent / 100.0;
+            var item = new Forms.ToolStripMenuItem($"{percent}%") { Tag = scale };
+            item.Click += (_, _) =>
+            {
+                _settings.WindowScale = scale;
+                SettingsStore.Save(_paths.SettingsPath, _settings, _logger);
+                UpdateMenuChecks();
+                ApplyPlacement();
+            };
+            _scaleItems.Add(item);
+            scaleMenu.DropDownItems.Add(item);
+        }
+        _menu.Items.Add(scaleMenu);
         _menu.Items.Add(new Forms.ToolStripSeparator());
         _menu.Items.Add("Exit", null, (_, _) => RequestExit());
         UpdateMenuChecks();
@@ -203,10 +215,6 @@ public partial class MainWindow : Window
     {
         _hwnd = new WindowInteropHelper(this).Handle;
         NativeMethods.ApplyOverlayStyles(_hwnd);
-        if (!NativeMethods.EnableFrostedBackdrop(_hwnd))
-        {
-            _logger.Warning("native frosted backdrop is unavailable; using translucent WPF fallback");
-        }
         ApplyPlacement();
         ForceTopmost();
     }
@@ -505,6 +513,8 @@ public partial class MainWindow : Window
 
     private void UpdateMenuChecks()
     {
+        foreach (var item in _scaleItems)
+            item.Checked = item.Tag is double scale && Math.Abs(scale - _settings.WindowScale) < 0.001;
         foreach (var item in _quotaIntervalItems)
         {
             item.Checked = item.Tag is int seconds && seconds == _settings.QuotaInterval;
@@ -528,32 +538,26 @@ public partial class MainWindow : Window
 
     private void BeginDrag(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (_menuVisible || !NativeMethods.GetWindowRect(_hwnd, out _dragRect)) return;
-        _dragStart = Forms.Control.MousePosition;
-        _isDragging = CaptureMouse();
-        e.Handled = true;
-    }
+        if (_menuVisible || _isDragging ||
+            e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
 
-    private void MoveDrag(object sender, System.Windows.Input.MouseEventArgs e)
-    {
-        if (!_isDragging) return;
-        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+        e.Handled = true;
+        _isDragging = true;
+        try
+        {
+            // Let Windows track the pointer; do not resize/reposition on every WPF MouseMove.
+            DragMove();
+        }
+        finally
         {
             EndDrag();
-            return;
         }
-        var cursor = Forms.Control.MousePosition;
-        NativeMethods.SetTopmostPosition(_hwnd,
-            _dragRect.Left + cursor.X - _dragStart.X,
-            _dragRect.Top + cursor.Y - _dragStart.Y,
-            _dragRect.Width, _dragRect.Height);
     }
-
     private void EndDrag()
     {
         if (!_isDragging) return;
         _isDragging = false;
-        ReleaseMouseCapture();
+
         if (NativeMethods.GetWindowRect(_hwnd, out var rect))
         {
             _settings.WindowX = rect.Left;
@@ -572,7 +576,9 @@ public partial class MainWindow : Window
     {
         if (_isDragging) return;
         var width = TaskbarPlacementCalculator.DisplayWidth(_settings.WindowWidth, _showFiveHour);
-        var placement = ResolveTaskbarPlacement(width, _settings.WindowX, _settings.WindowY);
+        DesignSurface.Width = width;
+        DesignSurface.Height = Constants.DefaultHeight;
+        var placement = ResolveTaskbarPlacement(width, _settings.WindowX, _settings.WindowY, _settings.WindowScale);
         if (_hwnd == IntPtr.Zero) return;
         if (NativeMethods.GetWindowRect(_hwnd, out var current) &&
             current.Left == placement.X && current.Top == placement.Y &&
@@ -581,13 +587,13 @@ public partial class MainWindow : Window
         NativeMethods.SetTopmostPosition(_hwnd, placement.X, placement.Y, placement.Width, placement.Height);
     }
 
-    public static TaskbarPlacement ResolveTaskbarPlacement(int preferredWidth, int? x = null, int? y = null)
+    public static TaskbarPlacement ResolveTaskbarPlacement(int preferredWidth, int? x = null, int? y = null, double scale = 1.0)
     {
         var screen = x.HasValue && y.HasValue
             ? Forms.Screen.FromPoint(new System.Drawing.Point(x.Value, y.Value))
             : Forms.Screen.PrimaryScreen;
         var area = screen?.WorkingArea ?? new System.Drawing.Rectangle(
             0, 0, (int)SystemParameters.PrimaryScreenWidth, (int)SystemParameters.PrimaryScreenHeight);
-        return TaskbarPlacementCalculator.InWorkingArea(area, preferredWidth, Constants.DefaultHeight, x, y);
+        return TaskbarPlacementCalculator.ScaledInWorkingArea(area, preferredWidth, Constants.DefaultHeight, scale, x, y);
     }
 }

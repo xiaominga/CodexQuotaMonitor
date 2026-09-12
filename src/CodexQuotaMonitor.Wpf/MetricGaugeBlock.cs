@@ -48,15 +48,15 @@ public sealed class MetricGaugeBlock : FrameworkElement
 
         var labelSize = Math.Clamp(height * 0.21, 7.0, 9.2);
         var detailSize = Math.Clamp(height * 0.195, 6.8, 8.6);
-        DrawText(dc, _title, 4, 1, labelSize, FontWeights.Bold, primary, dpi);
-        DrawText(dc, _detail, 4, height - detailSize - 2, detailSize, FontWeights.Normal, muted, dpi);
+        DrawText(dc, _title, 4, 3, labelSize, FontWeights.Bold, primary, dpi);
+        DrawText(dc, _detail, 4, height - detailSize - 4, detailSize, FontWeights.Normal, muted, dpi);
 
         var gaugeSize = Math.Clamp(height - 3, 22.0, 38.0);
         var gaugeX = width - gaugeSize - 2.0;
         var gaugeY = (height - gaugeSize) / 2.0;
         var center = new Point(gaugeX + gaugeSize / 2.0, gaugeY + gaugeSize / 2.0);
-        var stroke = Math.Clamp(gaugeSize * 0.09, 2.0, 3.2);
-        var radius = Math.Max(5.0, gaugeSize / 2.0 - stroke - 0.8);
+        var stroke = Math.Clamp(gaugeSize * 0.065, 1.8, 2.5);
+        var radius = Math.Max(5.0, gaugeSize / 2.0 - stroke / 2.0 - 1.5);
         var trackPen = new Pen(track, stroke) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
         dc.DrawEllipse(null, trackPen, center, radius, radius);
 
@@ -76,7 +76,7 @@ public sealed class MetricGaugeBlock : FrameworkElement
         DrawCenteredText(
             dc,
             Formatting.RemainingText(_remaining),
-            new Rect(gaugeX, gaugeY, gaugeSize, gaugeSize),
+            new Rect(center.X - radius * 0.72, center.Y - radius * 0.72, radius * 1.44, radius * 1.44),
             Math.Clamp(gaugeSize * 0.43, 10.0, 16.0),
             FontWeights.Bold,
             _remaining.HasValue ? accent : muted,
@@ -122,6 +122,14 @@ public sealed class MetricGaugeBlock : FrameworkElement
     {
         var formatted = MakeText(text, size, weight, brush, dpi);
         var textBounds = formatted.BuildGeometry(new Point(0, 0)).Bounds;
+        // Fit the actual glyph outline into a safe area inside the ring.
+        var fit = Math.Min(1.0, Math.Min(bounds.Width / Math.Max(1, textBounds.Width),
+            bounds.Height / Math.Max(1, textBounds.Height)));
+        if (fit < 1)
+        {
+            formatted = MakeText(text, size * fit, weight, brush, dpi);
+            textBounds = formatted.BuildGeometry(new Point(0, 0)).Bounds;
+        }
         var x = bounds.Left + (bounds.Width - textBounds.Width) / 2.0 - textBounds.Left;
         var y = bounds.Top + (bounds.Height - textBounds.Height) / 2.0 - textBounds.Top;
         dc.DrawText(formatted, new Point(x, y));

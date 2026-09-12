@@ -41,50 +41,27 @@ public sealed class RefreshStatusBlock : FrameworkElement
         var current = new SolidColorBrush(Formatting.ColorFromHex("#F4F6F8"));
         var muted = new SolidColorBrush(Formatting.ColorFromHex("#8F9BA8"));
         var refresh = new SolidColorBrush(Formatting.ColorFromHex("#58B8FF"));
-        var labelSize = Math.Clamp(height * 0.21, 7.0, 9.2);
-
-        DrawText(dc, "REF", 4, 1, labelSize, FontWeights.Bold, current, dpi);
-        dc.DrawEllipse(accent, null, new Point(width - 5, 5), 2.2, 2.2);
-        DrawTimePair(dc, FormatTime(_refreshedAt), FormatTime(_currentTime), width, height, refresh, current, muted, dpi);
-
-        if (!string.IsNullOrWhiteSpace(_status))
-        {
-            var statusSize = Math.Clamp(height * 0.18, 7.0, 8.0);
-            DrawCenteredText(dc, _status, new Rect(0, height - statusSize - 2, width, statusSize + 2), statusSize, FontWeights.Bold, accent, dpi);
-        }
+        // Two balanced rows give both times enough room without a cramped slash.
+        var rowHeight = height / 2;
+        DrawTimeRow(dc, string.IsNullOrWhiteSpace(_status) ? "SYNC" : _status,
+            FormatTime(_refreshedAt), new Rect(0, 0, width, rowHeight),
+            string.IsNullOrWhiteSpace(_status) ? muted : accent, refresh, dpi);
+        DrawTimeRow(dc, "NOW", FormatTime(_currentTime),
+            new Rect(0, rowHeight, width, rowHeight), muted, current, dpi);
     }
 
-    private static string FormatTime(DateTimeOffset? value)
+    private static string FormatTime(DateTimeOffset? value) =>
+        value.HasValue ? value.Value.ToString("HH:mm", CultureInfo.CurrentCulture) : "--:--";
+
+    private static void DrawTimeRow(DrawingContext dc, string label, string time,
+        Rect row, Brush labelBrush, Brush timeBrush, double dpi)
     {
-        return value.HasValue ? value.Value.ToString("HH:mm", CultureInfo.CurrentCulture) : "--:--";
+        var labelWidth = Math.Max(22, row.Width * 0.29);
+        DrawCenteredText(dc, label, new Rect(0, row.Top, labelWidth, row.Height),
+            6.8, FontWeights.SemiBold, labelBrush, dpi);
+        DrawCenteredText(dc, time, new Rect(labelWidth, row.Top, row.Width - labelWidth - 2, row.Height),
+            Math.Min(16, row.Height * 0.79), FontWeights.SemiBold, timeBrush, dpi);
     }
-
-    private static void DrawTimePair(
-        DrawingContext dc,
-        string refreshTime,
-        string currentTime,
-        double width,
-        double height,
-        Brush refreshBrush,
-        Brush currentBrush,
-        Brush separatorBrush,
-        double dpi)
-    {
-        var size = Math.Clamp(height * 0.285, 8.8, 12.5);
-        var refresh = MakeText(refreshTime, size, FontWeights.SemiBold, refreshBrush, dpi);
-        var slash = MakeText("/", size - 0.6, FontWeights.Normal, separatorBrush, dpi);
-        var current = MakeText(currentTime, size, FontWeights.SemiBold, currentBrush, dpi);
-        var total = refresh.WidthIncludingTrailingWhitespace + slash.WidthIncludingTrailingWhitespace + current.WidthIncludingTrailingWhitespace;
-        var x = Math.Max(1.0, (width - total) / 2.0);
-        var y = Math.Max(8.0, height * 0.43 - size / 2.0);
-
-        dc.DrawText(refresh, new Point(x, y));
-        x += refresh.WidthIncludingTrailingWhitespace;
-        dc.DrawText(slash, new Point(x, y + 0.4));
-        x += slash.WidthIncludingTrailingWhitespace;
-        dc.DrawText(current, new Point(x, y));
-    }
-
     private static void DrawText(DrawingContext dc, string text, double x, double y, double size, FontWeight weight, Brush brush, double dpi)
     {
         dc.DrawText(MakeText(text, size, weight, brush, dpi), new Point(x, y));
@@ -94,6 +71,12 @@ public sealed class RefreshStatusBlock : FrameworkElement
     {
         var formatted = MakeText(text, size, weight, brush, dpi);
         var textBounds = formatted.BuildGeometry(new Point(0, 0)).Bounds;
+        var fit = Math.Min(1.0, (bounds.Width - 2) / Math.Max(1, textBounds.Width));
+        if (fit < 1)
+        {
+            formatted = MakeText(text, size * fit, weight, brush, dpi);
+            textBounds = formatted.BuildGeometry(new Point(0, 0)).Bounds;
+        }
         var x = bounds.Left + (bounds.Width - textBounds.Width) / 2.0 - textBounds.Left;
         var y = bounds.Top + (bounds.Height - textBounds.Height) / 2.0 - textBounds.Top;
         dc.DrawText(formatted, new Point(x, y));

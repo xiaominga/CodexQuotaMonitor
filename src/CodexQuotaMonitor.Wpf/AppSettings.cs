@@ -26,11 +26,14 @@ public sealed class AppSettings
     [JsonPropertyName("window_y")]
     public int? WindowY { get; set; }
 
+    [JsonPropertyName("window_scale")]
+    public double WindowScale { get; set; } = 1.0;
+
     public AppSettings Clone() => new()
     {
         QuotaInterval = QuotaInterval,
         NoTray = NoTray,
-        WindowWidth = WindowWidth,
+        WindowWidth = WindowWidth, WindowScale = WindowScale,
         WindowX = WindowX,
         WindowY = WindowY,
         RedThreshold = RedThreshold,
@@ -39,6 +42,7 @@ public sealed class AppSettings
 
     public void Normalize()
     {
+        WindowScale = double.IsFinite(WindowScale) ? Math.Clamp(WindowScale, 0.5, 3.0) : 1.0;
         QuotaInterval = Math.Max(30, QuotaInterval);
         WindowWidth = WindowWidth is < 220 or > 300
             ? Constants.DefaultWidth

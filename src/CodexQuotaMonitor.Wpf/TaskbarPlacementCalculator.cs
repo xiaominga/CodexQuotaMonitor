@@ -2,6 +2,16 @@ namespace CodexQuotaMonitor.Wpf;
 
 public static class TaskbarPlacementCalculator
 {
+    public static TaskbarPlacement ScaledInWorkingArea(
+        System.Drawing.Rectangle area, int width, int height, double scale, int? x = null, int? y = null)
+    {
+        scale = double.IsFinite(scale) ? Math.Clamp(scale, 0.5, 3.0) : 1.0;
+        // Fit both dimensions together so a small screen never distorts the card.
+        scale = Math.Min(scale, Math.Min((double)area.Width / width, (double)area.Height / height));
+        return InWorkingArea(area, Math.Max(1, (int)Math.Round(width * scale)),
+            Math.Max(1, (int)Math.Round(height * scale)), x, y);
+    }
+
     // Coordinates and sizes are physical pixels, including negative monitor origins.
     public static TaskbarPlacement InWorkingArea(
         System.Drawing.Rectangle area, int width, int height, int? x = null, int? y = null)

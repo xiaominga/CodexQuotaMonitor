@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using CodexQuotaMonitor.Wpf;
 
@@ -9,6 +10,7 @@ var tests = new (string Name, Action Body)[]
     ("formatting helpers", TestFormatting),
     ("taskbar overlay placement", TestTaskbarPlacement),
     ("floating placement and adaptive columns", TestFloatingLayout),
+    ("transparent overlay corners", TestTransparentCorners),
     ("argument handling", TestArguments)
 };
 
@@ -111,6 +113,7 @@ static void TestSettings()
         Equal(300, merged.QuotaInterval, "cli quota override");
         Equal(false, merged.NoTray, "cli tray override");
 
+        merged.WindowScale = 1.5;
         merged.WindowX = -1800;
         merged.WindowY = 120;
         SettingsStore.Save(path, merged);
@@ -119,6 +122,11 @@ static void TestSettings()
         Equal<int?>(120, restored.WindowY, "saved vertical position");
         var overridden = SettingsStore.ApplyCliOverrides(restored, cli);
         Equal(restored.WindowX, overridden.WindowX, "CLI preserves position");
+        Equal(1.5, restored.WindowScale, "saved scale");
+        Equal(1.5, overridden.WindowScale, "CLI preserves scale");
+        var invalidScale = new AppSettings { WindowScale = double.NaN };
+        invalidScale.Normalize();
+        Equal(1.0, invalidScale.WindowScale, "invalid scale fallback");
 
         File.WriteAllText(path, "{ broken json");
         var fallback = SettingsStore.Load(path);
@@ -175,6 +183,107 @@ static void TestFloatingLayout()
         new QuotaSnapshot(FiveHour: new LimitWindow("5h"))), "5H returns");
     Equal(176, TaskbarPlacementCalculator.DisplayWidth(260, false), "compact width");
     Equal(260, TaskbarPlacementCalculator.DisplayWidth(260, true), "full width");
+    Equal(new TaskbarPlacement(1520, 950, 390, 72),
+        TaskbarPlacementCalculator.ScaledInWorkingArea(area, 260, 48, 1.5), "150 percent");
+    Equal(new TaskbarPlacement(1715, 986, 195, 36),
+        TaskbarPlacementCalculator.ScaledInWorkingArea(area, 260, 48, .75), "75 percent");
+    Equal(new TaskbarPlacement(1382, 878, 528, 144),
+        TaskbarPlacementCalculator.ScaledInWorkingArea(area, 176, 48, 3), "weekly-only 300 percent");
+    var fitted = TaskbarPlacementCalculator.ScaledInWorkingArea(new(0, 0, 300, 100), 260, 48, 3);
+    Equal(300, fitted.Width, "fit small screen width");
+    Equal(55, fitted.Height, "fit small screen proportional height");
+}
+
+static void TestTransparentCorners()
+{
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var xml = System.Xml.Linq.XDocument.Load(Path.Combine(AppContext.BaseDirectory, "OverlayTemplate.xaml"));
+            var root = xml.Root!;
+            // Load the production visual tree without code-behind, icons or live quota queries.
+            foreach (var attribute in root.Attributes().ToArray())
+            {
+                if (attribute.Name.LocalName is "Class" or "Loaded" or "SourceInitialized" or
+                    "Closing" or "MouseRightButtonUp" or "Icon")
+                    attribute.Remove();
+            }
+            var window = (System.Windows.Window)System.Windows.Markup.XamlReader.Parse(xml.ToString());
+            try
+            {
+                Equal(true, window.AllowsTransparency, "per-pixel window transparency");
+                Equal((byte)0, ((System.Windows.Media.SolidColorBrush)window.Background).Color.A,
+                    "window background alpha");
+                var content = (System.Windows.FrameworkElement)window.Content;
+                var viewbox = (System.Windows.Controls.Viewbox)content;
+                Equal(System.Windows.Media.Stretch.Uniform, viewbox.Stretch, "uniform vector scaling");
+                foreach (var baseWidth in new[] { 260, 176 })
+                foreach (var scale in new[] { .75, 1.0, 1.5, 3.0 })
+                {
+                    ((System.Windows.FrameworkElement)viewbox.Child).Width = baseWidth;
+                    var grid = (System.Windows.Controls.Grid)window.FindName("RootGrid");
+                    grid.Children.Clear();
+                    grid.ColumnDefinitions.Clear();
+                    var labels = baseWidth == 260 ? new[] { "5H", "WK" } : new[] { "WK" };
+                    foreach (var label in labels)
+                    {
+                        grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
+                        var gauge = new MetricGaugeBlock(label, new AppSettings())
+                        { Margin = new System.Windows.Thickness(0, 0, 2, 0) };
+                        gauge.SetMetric(label == "WK" ? 100 : 14, "6d 23h", new AppSettings());
+                        System.Windows.Controls.Grid.SetColumn(gauge, grid.ColumnDefinitions.Count - 1);
+                        grid.Children.Add(gauge);
+                        var divider = new System.Windows.Controls.Border
+                        {
+                            Width = 1, Margin = new System.Windows.Thickness(0, 5, 0, 5),
+                            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(56, 255, 255, 255))
+                        };
+                        System.Windows.Controls.Grid.SetColumn(divider, grid.ColumnDefinitions.Count - 1);
+                        grid.Children.Add(divider);
+                    }
+                    grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+                    { Width = new System.Windows.GridLength(1.08, System.Windows.GridUnitType.Star) });
+                    var refresh = new RefreshStatusBlock { Margin = new System.Windows.Thickness(3, 0, 0, 0) };
+                    refresh.SetStatus(new DateTimeOffset(2026, 9, 12, 16, 55, 0, TimeSpan.Zero),
+                        new DateTimeOffset(2026, 9, 12, 16, 57, 0, TimeSpan.Zero), "", "#2DD4A8");
+                    System.Windows.Controls.Grid.SetColumn(refresh, grid.ColumnDefinitions.Count - 1);
+                    grid.Children.Add(refresh);
+                    var width = (int)Math.Round(baseWidth * scale);
+                    var height = (int)Math.Round(48 * scale);
+                    content.Measure(new System.Windows.Size(width, height));
+                    content.Arrange(new System.Windows.Rect(0, 0, width, height));
+                    content.UpdateLayout();
+                    var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                        width, height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                    bitmap.Render(content);
+                    var previewDirectory = Environment.GetEnvironmentVariable("QUOTA_PREVIEW_DIRECTORY");
+                    if (!string.IsNullOrWhiteSpace(previewDirectory))
+                    {
+                        Directory.CreateDirectory(previewDirectory);
+                        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+                        using var output = File.Create(Path.Combine(previewDirectory, $"overlay-{baseWidth}-{scale * 100:0}.png"));
+                        encoder.Save(output);
+                    }
+                    var pixels = new byte[width * height * 4];
+                    bitmap.CopyPixels(pixels, width * 4, 0);
+                    foreach (var (x, y) in new[] { (0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1) })
+                        Equal((byte)0, pixels[(y * width + x) * 4 + 3], "scaled transparent corner");
+                    if (pixels[((height / 2) * width + width / 2) * 4 + 3] == 0)
+                        throw new InvalidOperationException("Scaled card body must remain visible");
+                }
+            }
+            finally { window.Close(); }
+        }
+        catch (Exception ex) { failure = ex; }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (failure is not null) throw new InvalidOperationException("WPF transparency regression", failure);
 }
 
 static void TestArguments()
