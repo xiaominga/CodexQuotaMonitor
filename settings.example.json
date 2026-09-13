@@ -1,6 +1,7 @@
 {
   "quota_interval": 180,
   "no_tray": false,
+  "glass_effect": false,
   "window_width": 260,
   "red_threshold": 15.0,
   "amber_threshold": 30.0

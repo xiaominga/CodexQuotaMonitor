@@ -19,13 +19,15 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _topmostTimer = new();
     private readonly DispatcherTimer _placementTimer = new();
     private readonly DispatcherTimer _menuDismissTimer = new();
-    private readonly MetricGaugeBlock _quota5h;
-    private readonly MetricGaugeBlock _quotaWeek;
+    private readonly QuotaMetricBlock _quota5h;
+    private readonly QuotaMetricBlock _quotaWeek;
     private readonly RefreshStatusBlock _refreshStatus;
     private readonly Forms.ContextMenuStrip _menu = new();
+    private readonly Forms.ToolStripMenuItem _glassEffectItem = new("Glass effect / 玻璃效果");
     private readonly List<Forms.ToolStripMenuItem> _quotaIntervalItems = new();
     private Forms.NotifyIcon? _notifyIcon;
     private System.Drawing.Icon? _trayIcon;
+    private (double? FiveHour, double? Weekly, double Red, double Amber, int Size)? _trayVisual;
     private AppSettings _settings;
     private IntPtr _hwnd;
     private QuotaSnapshot? _lastQuota;
@@ -50,17 +52,17 @@ public partial class MainWindow : Window
         _quotaReader = new QuotaReader(paths.ResolveCodexHome(options.CodexHome), options.CodexExe, logger);
 
         InitializeComponent();
-        Width = _settings.WindowWidth;
+        ApplyGlassEffect();
+        Width = TaskbarPlacementCalculator.DisplayWidth(_settings.WindowWidth, true);
         Height = Constants.DefaultHeight;
 
-        RootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        RootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        RootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.08, GridUnitType.Star) });
-        _quota5h = AddGaugeBlock("5H", 0);
-        _quotaWeek = AddGaugeBlock("WK", 1);
-        _refreshStatus = AddRefreshBlock(2);
+        RootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54.35, GridUnitType.Star) });
+        RootGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(66.35, GridUnitType.Star) });
+
+        _quota5h = AddMetricBlock("5H", 0);
+        _quotaWeek = AddMetricBlock("WK", 1);
+        _refreshStatus = AddRefreshBlock(1);
         _fiveHourSeparator = AddSeparator(0);
-        AddSeparator(1);
 
         MouseLeftButtonDown += BeginDrag;
         BuildMenu();
@@ -69,11 +71,11 @@ public partial class MainWindow : Window
         RefreshNow();
     }
 
-    private MetricGaugeBlock AddGaugeBlock(string title, int column)
+    private QuotaMetricBlock AddMetricBlock(string title, int column)
     {
-        var block = new MetricGaugeBlock(title, _settings)
+        var block = new QuotaMetricBlock(title, _settings)
         {
-            Margin = new Thickness(column == 0 ? 0 : 3, 0, 2, 0)
+            Margin = new Thickness(0)
         };
         Grid.SetColumn(block, column);
         RootGrid.Children.Add(block);
@@ -82,7 +84,7 @@ public partial class MainWindow : Window
 
     private RefreshStatusBlock AddRefreshBlock(int column)
     {
-        var block = new RefreshStatusBlock { Margin = new Thickness(3, 0, 0, 0) };
+        var block = new RefreshStatusBlock { Margin = new Thickness(0, 0.35, 1.35, 0) };
         Grid.SetColumn(block, column);
         RootGrid.Children.Add(block);
         return block;
@@ -92,11 +94,11 @@ public partial class MainWindow : Window
     {
         var separator = new Border
         {
-            Width = 1,
-            Margin = new Thickness(0, 5, 0, 5),
+            Width = 0.5,
+            Margin = new Thickness(0, 10.35, 0, 9.35),
             HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
             VerticalAlignment = System.Windows.VerticalAlignment.Stretch,
-            Background = new SolidColorBrush(Formatting.ColorFromHex("#38FFFFFF")),
+            Background = new SolidColorBrush(Formatting.ColorFromHex("#2C3440")),
             IsHitTestVisible = false
         };
         Grid.SetColumn(separator, column);
@@ -176,6 +178,14 @@ public partial class MainWindow : Window
             scaleMenu.DropDownItems.Add(item);
         }
         _menu.Items.Add(scaleMenu);
+        _glassEffectItem.Click += (_, _) =>
+        {
+            _settings.GlassEffect = !_settings.GlassEffect;
+            ApplyGlassEffect();
+            UpdateMenuChecks();
+            SettingsStore.Save(_paths.SettingsPath, _settings, _logger);
+        };
+        _menu.Items.Add(_glassEffectItem);
         _menu.Items.Add(new Forms.ToolStripSeparator());
         _menu.Items.Add("Exit", null, (_, _) => RequestExit());
         UpdateMenuChecks();
@@ -249,26 +259,28 @@ public partial class MainWindow : Window
 
     private System.Drawing.Icon LoadTrayIcon()
     {
-        try
-        {
-            var processPath = Environment.ProcessPath;
-            if (!string.IsNullOrWhiteSpace(processPath))
-            {
-                _trayIcon = System.Drawing.Icon.ExtractAssociatedIcon(processPath);
-                if (_trayIcon is not null)
-                {
-                    return _trayIcon;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning($"failed to load tray icon from executable: {ex.Message}");
-        }
-
-        return System.Drawing.SystemIcons.Application;
+        _trayIcon = QuotaTrayIcon.Create(null, null, _settings, Forms.SystemInformation.SmallIconSize.Width);
+        return _trayIcon;
     }
 
+    private void UpdateTrayIcon()
+    {
+        if (_notifyIcon is null) return;
+        var state = (_lastQuota?.FiveHour?.RemainingPercent, _lastQuota?.Weekly?.RemainingPercent,
+            _settings.RedThreshold, _settings.AmberThreshold, Forms.SystemInformation.SmallIconSize.Width);
+        if (_trayVisual == state) return;
+        try
+        {
+            var next = QuotaTrayIcon.Create(state.Item1, state.Item2, _settings, state.Item5);
+            try { _notifyIcon.Icon = next; }
+            catch { next.Dispose(); throw; }
+            var previous = _trayIcon;
+            _trayIcon = next;
+            _trayVisual = state;
+            previous?.Dispose();
+        }
+        catch (Exception ex) { _logger.Warning($"failed to update quota tray icon: {ex.Message}"); }
+    }
     private void OnMouseRightButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         ForceTopmost();
@@ -411,11 +423,12 @@ public partial class MainWindow : Window
             _quota5h.Visibility = _fiveHourSeparator.Visibility =
                 showFiveHour ? Visibility.Visible : Visibility.Collapsed;
             RootGrid.ColumnDefinitions[0].Width = showFiveHour
-                ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
-            _quotaWeek.Margin = new Thickness(showFiveHour ? 3 : 0, 0, 2, 0);
+                ? new GridLength(54.35, GridUnitType.Star) : new GridLength(0);
+
             ApplyPlacement();
         }
         RenderQuota();
+        UpdateTrayIcon();
         RenderRefreshStatus();
         UpdateTitle();
     }
@@ -444,33 +457,28 @@ public partial class MainWindow : Window
     private void RenderRefreshStatus()
     {
         var now = DateTimeOffset.Now;
-        if (_quotaInFlight)
-        {
-            _refreshStatus.SetStatus(_quotaLastSuccessAt, now, "SYNC", "#FFC857");
-            return;
-        }
         if (_lastQuota is null)
         {
-            _refreshStatus.SetStatus(null, now, "WAIT", "#8794A2");
+            _refreshStatus.SetStatus(null, now, "WAIT", "#8794A2", refreshing: _quotaInFlight);
             return;
         }
         if (_quotaLastError is not null && _quotaLastSuccessAt.HasValue)
         {
-            _refreshStatus.SetStatus(_quotaLastSuccessAt, now, "OLD", "#FFC857");
+            _refreshStatus.SetStatus(_quotaLastSuccessAt, now, "OLD", "#FFC857", _quotaLastError, _quotaInFlight);
             return;
         }
         if (_lastQuota.Error is not null && !_quotaLastSuccessAt.HasValue)
         {
-            _refreshStatus.SetStatus(null, now, "ERR", "#FF6B81");
+            _refreshStatus.SetStatus(null, now, "ERR", "#FF6B81", _quotaLastError ?? _lastQuota.Error, _quotaInFlight);
             return;
         }
         if (IsStale(_quotaLastSuccessAt, _settings.QuotaInterval))
         {
-            _refreshStatus.SetStatus(_quotaLastSuccessAt, now, "STALE", "#FFC857");
+            _refreshStatus.SetStatus(_quotaLastSuccessAt, now, "STALE", "#FFC857", refreshing: _quotaInFlight);
             return;
         }
 
-        _refreshStatus.SetStatus(_quotaLastSuccessAt, now, "", "#2DD4A8");
+        _refreshStatus.SetStatus(_quotaLastSuccessAt, now, "", "#2DD4A8", refreshing: _quotaInFlight);
     }
 
     private void UpdateTitle()
@@ -487,9 +495,12 @@ public partial class MainWindow : Window
         Title = $"{Constants.WindowTitlePrefix} | updated {stamp} | quota {_settings.QuotaInterval}s | {string.Join(" | ", parts)}";
         if (_notifyIcon is not null)
         {
-            _notifyIcon.Text = Formatting.Truncate(Title, 120);
+            _notifyIcon.Text = Formatting.Truncate(
+                $"5H: {TrayPercent(_lastQuota?.FiveHour?.RemainingPercent)} | WK: {TrayPercent(_lastQuota?.Weekly?.RemainingPercent)} | updated {stamp} | {string.Join(" | ", parts)}", 120);
         }
     }
+
+    private static string TrayPercent(double? value) => value.HasValue ? $"{value.Value:0}%" : "--";
 
     private static bool IsStale(DateTimeOffset? timestamp, int intervalSeconds)
     {
@@ -511,8 +522,12 @@ public partial class MainWindow : Window
         UpdateTitle();
     }
 
+    private void ApplyGlassEffect() =>
+        CardFrame.GlassEnabled = _settings.GlassEffect;
+
     private void UpdateMenuChecks()
     {
+        _glassEffectItem.Checked = _settings.GlassEffect;
         foreach (var item in _scaleItems)
             item.Checked = item.Tag is double scale && Math.Abs(scale - _settings.WindowScale) < 0.001;
         foreach (var item in _quotaIntervalItems)
@@ -576,7 +591,7 @@ public partial class MainWindow : Window
     {
         if (_isDragging) return;
         var width = TaskbarPlacementCalculator.DisplayWidth(_settings.WindowWidth, _showFiveHour);
-        DesignSurface.Width = width;
+        DesignSurface.Width = _showFiveHour ? 124 : 70;
         DesignSurface.Height = Constants.DefaultHeight;
         var placement = ResolveTaskbarPlacement(width, _settings.WindowX, _settings.WindowY, _settings.WindowScale);
         if (_hwnd == IntPtr.Zero) return;

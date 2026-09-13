@@ -11,6 +11,9 @@ public sealed class AppSettings
     [JsonPropertyName("no_tray")]
     public bool NoTray { get; set; }
 
+    [JsonPropertyName("glass_effect")]
+    public bool GlassEffect { get; set; }
+
     [JsonPropertyName("window_width")]
     public int WindowWidth { get; set; } = Constants.DefaultWidth;
 
@@ -33,6 +36,7 @@ public sealed class AppSettings
     {
         QuotaInterval = QuotaInterval,
         NoTray = NoTray,
+        GlassEffect = GlassEffect,
         WindowWidth = WindowWidth, WindowScale = WindowScale,
         WindowX = WindowX,
         WindowY = WindowY,

@@ -28,7 +28,7 @@ public static class TaskbarPlacementCalculator
         lastValidQuota is null || lastValidQuota.Error is not null || lastValidQuota.FiveHour is not null;
 
     public static int DisplayWidth(int fullWidth, bool showFiveHour) =>
-        showFiveHour ? fullWidth : (int)Math.Round(fullWidth * 2.08 / 3.08);
+        (int)Math.Round(fullWidth * (showFiveHour ? 124.0 : 70.0) / Constants.DefaultWidth);
 
     private const uint EdgeLeft = 0;
     private const uint EdgeTop = 1;

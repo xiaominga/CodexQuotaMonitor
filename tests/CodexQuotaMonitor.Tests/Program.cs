@@ -11,6 +11,8 @@ var tests = new (string Name, Action Body)[]
     ("taskbar overlay placement", TestTaskbarPlacement),
     ("floating placement and adaptive columns", TestFloatingLayout),
     ("transparent overlay corners", TestTransparentCorners),
+    ("dynamic tray rings", TestTrayRings),
+    ("rounded frame geometry", TestRoundedFrame),
     ("argument handling", TestArguments)
 };
 
@@ -93,11 +95,13 @@ static void TestSettings()
     {
         var defaults = SettingsStore.Load(path);
         Equal(180, defaults.QuotaInterval, "default quota interval");
+        Equal(false, defaults.GlassEffect, "normal palette by default");
 
         File.WriteAllText(path, """
             {
               "quota_interval": 60,
               "no_tray": true,
+              "glass_effect": true,
               "window_width": 336,
               "red_threshold": 10,
               "amber_threshold": 25
@@ -112,12 +116,14 @@ static void TestSettings()
         var merged = SettingsStore.ApplyCliOverrides(loaded, cli);
         Equal(300, merged.QuotaInterval, "cli quota override");
         Equal(false, merged.NoTray, "cli tray override");
+        Equal(true, merged.GlassEffect, "CLI clone preserves glass setting");
 
         merged.WindowScale = 1.5;
         merged.WindowX = -1800;
         merged.WindowY = 120;
         SettingsStore.Save(path, merged);
         var restored = SettingsStore.Load(path);
+        Equal(true, restored.GlassEffect, "glass setting survives save and reload");
         Equal<int?>(-1800, restored.WindowX, "saved negative monitor coordinate");
         Equal<int?>(120, restored.WindowY, "saved vertical position");
         var overridden = SettingsStore.ApplyCliOverrides(restored, cli);
@@ -181,8 +187,8 @@ static void TestFloatingLayout()
         "initial failure is not absence");
     Equal(true, TaskbarPlacementCalculator.ShowFiveHour(
         new QuotaSnapshot(FiveHour: new LimitWindow("5h"))), "5H returns");
-    Equal(176, TaskbarPlacementCalculator.DisplayWidth(260, false), "compact width");
-    Equal(260, TaskbarPlacementCalculator.DisplayWidth(260, true), "full width");
+    Equal(70, TaskbarPlacementCalculator.DisplayWidth(260, false), "compact width");
+    Equal(124, TaskbarPlacementCalculator.DisplayWidth(260, true), "full width");
     Equal(new TaskbarPlacement(1520, 950, 390, 72),
         TaskbarPlacementCalculator.ScaledInWorkingArea(area, 260, 48, 1.5), "150 percent");
     Equal(new TaskbarPlacement(1715, 986, 195, 36),
@@ -210,7 +216,7 @@ static void TestTransparentCorners()
                     "Closing" or "MouseRightButtonUp" or "Icon")
                     attribute.Remove();
             }
-            var window = (System.Windows.Window)System.Windows.Markup.XamlReader.Parse(xml.ToString());
+            var window = (System.Windows.Window)System.Windows.Markup.XamlReader.Parse(xml.ToString().Replace("clr-namespace:CodexQuotaMonitor.Wpf", "clr-namespace:CodexQuotaMonitor.Wpf;assembly=CodexQuotaMonitor.Wpf"));
             try
             {
                 Equal(true, window.AllowsTransparency, "per-pixel window transparency");
@@ -219,34 +225,39 @@ static void TestTransparentCorners()
                 var content = (System.Windows.FrameworkElement)window.Content;
                 var viewbox = (System.Windows.Controls.Viewbox)content;
                 Equal(System.Windows.Media.Stretch.Uniform, viewbox.Stretch, "uniform vector scaling");
-                foreach (var baseWidth in new[] { 260, 176 })
-                foreach (var scale in new[] { .75, 1.0, 1.5, 3.0 })
+                var frame = (QuotaCardFrame)window.FindName("CardFrame");
+                Equal(true, frame.CacheMode is null, "no WPF bitmap cache");
+                Equal(false, frame.GlassEnabled, "glass defaults off");
+                Equal(false, frame.IsHitTestVisible, "frame does not block input");
+                foreach (var glassEnabled in new[] { false, true })
+                foreach (var baseWidth in new[] { 124, 70 })
+                foreach (var scale in new[] { .75, 1.0, 1.25, 1.5, 3.0 })
+                foreach (double? remaining in new double?[] { 14, 96, 100, 0, null })
                 {
+                    frame.GlassEnabled = glassEnabled;
                     ((System.Windows.FrameworkElement)viewbox.Child).Width = baseWidth;
                     var grid = (System.Windows.Controls.Grid)window.FindName("RootGrid");
                     grid.Children.Clear();
                     grid.ColumnDefinitions.Clear();
-                    var labels = baseWidth == 260 ? new[] { "5H", "WK" } : new[] { "WK" };
+                    var labels = baseWidth == 124 ? new[] { "5H", "WK" } : new[] { "WK" };
                     foreach (var label in labels)
                     {
-                        grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
-                        var gauge = new MetricGaugeBlock(label, new AppSettings())
-                        { Margin = new System.Windows.Thickness(0, 0, 2, 0) };
-                        gauge.SetMetric(label == "WK" ? 100 : 14, "6d 23h", new AppSettings());
+                        grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new System.Windows.GridLength(label == "5H" ? 54.35 : 66.35, System.Windows.GridUnitType.Star) });
+                        var gauge = new QuotaMetricBlock(label, new AppSettings())
+                        { Margin = new System.Windows.Thickness(0) };
+                        gauge.SetMetric(label == "WK" && baseWidth == 124 ? 100 : remaining, label == "WK" ? "6d 23h" : "2h 15m", new AppSettings());
                         System.Windows.Controls.Grid.SetColumn(gauge, grid.ColumnDefinitions.Count - 1);
                         grid.Children.Add(gauge);
                         var divider = new System.Windows.Controls.Border
                         {
-                            Width = 1, Margin = new System.Windows.Thickness(0, 5, 0, 5),
+                            Width = 0.5, Margin = new System.Windows.Thickness(0, 10.35, 0, 9.35),
                             HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
-                            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(56, 255, 255, 255))
+                            Background = new System.Windows.Media.SolidColorBrush(Formatting.ColorFromHex("#2C3440"))
                         };
                         System.Windows.Controls.Grid.SetColumn(divider, grid.ColumnDefinitions.Count - 1);
-                        grid.Children.Add(divider);
+                        if (label == "5H") grid.Children.Add(divider);
                     }
-                    grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
-                    { Width = new System.Windows.GridLength(1.08, System.Windows.GridUnitType.Star) });
-                    var refresh = new RefreshStatusBlock { Margin = new System.Windows.Thickness(3, 0, 0, 0) };
+                    var refresh = new RefreshStatusBlock { Margin = new System.Windows.Thickness(0, 0.35, 1.35, 0) };
                     refresh.SetStatus(new DateTimeOffset(2026, 9, 12, 16, 55, 0, TimeSpan.Zero),
                         new DateTimeOffset(2026, 9, 12, 16, 57, 0, TimeSpan.Zero), "", "#2DD4A8");
                     System.Windows.Controls.Grid.SetColumn(refresh, grid.ColumnDefinitions.Count - 1);
@@ -265,11 +276,20 @@ static void TestTransparentCorners()
                         Directory.CreateDirectory(previewDirectory);
                         var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
                         encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
-                        using var output = File.Create(Path.Combine(previewDirectory, $"overlay-{baseWidth}-{scale * 100:0}.png"));
+                        using var output = File.Create(Path.Combine(previewDirectory, $"overlay-{(glassEnabled ? "glass" : "normal")}-{baseWidth}-{scale * 100:0}-{remaining?.ToString() ?? "unknown"}.png"));
                         encoder.Save(output);
                     }
                     var pixels = new byte[width * height * 4];
                     bitmap.CopyPixels(pixels, width * 4, 0);
+                    if (scale == 3.0)
+                    {
+                        // The inner border seam must not expose the desktop through antialiasing.
+                        for (var inset = 5; inset <= 9; inset++)
+                        {
+                            Equal((byte)255, pixels[(inset * width + width / 2) * 4 + 3], "opaque top border join");
+                            Equal((byte)255, pixels[((height / 2) * width + inset) * 4 + 3], "opaque left border join");
+                        }
+                    }
                     foreach (var (x, y) in new[] { (0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1) })
                         Equal((byte)0, pixels[(y * width + x) * 4 + 3], "scaled transparent corner");
                     if (pixels[((height / 2) * width + width / 2) * 4 + 3] == 0)
@@ -319,5 +339,56 @@ static void Near(double expected, double actual, double tolerance, string label)
     if (Math.Abs(expected - actual) > tolerance)
     {
         throw new InvalidOperationException($"{label}: expected {expected}, got {actual}");
+    }
+}
+
+static void TestTrayRings()
+{
+    foreach (var size in new[] { 16, 20, 24, 32 })
+    {
+        using var bitmap = QuotaTrayIcon.RenderBitmap(14, 100, new AppSettings(), size);
+        using var reversed = QuotaTrayIcon.RenderBitmap(100, 14, new AppSettings(), size);
+        using var empty = QuotaTrayIcon.RenderBitmap(0, 0, new AppSettings(), size);
+        using var unavailable = QuotaTrayIcon.RenderBitmap(null, null, new AppSettings(), size);
+        Equal((byte)0, bitmap.GetPixel(0, 0).A, "transparent tray corner");
+        Equal((byte)0, bitmap.GetPixel(size / 2, size / 2).A, "open ring center");
+        var innerRed = 0; var outerGreen = 0; var outerRed = 0; var distinct = 0;
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var pixel = bitmap.GetPixel(x, y);
+            var distance = Math.Sqrt(Math.Pow((x + .5) * 16 / size - 8, 2) + Math.Pow((y + .5) * 16 / size - 8, 2));
+            if (pixel.A > 80 && distance < 5 && pixel.R > pixel.G * 1.4) innerRed++;
+            if (pixel.A > 80 && distance > 5 && pixel.G > pixel.R * 1.4) outerGreen++;
+            var other = reversed.GetPixel(x, y);
+            if (other.A > 80 && distance > 5 && other.R > other.G * 1.4) outerRed++;
+            if (empty.GetPixel(x, y) != unavailable.GetPixel(x, y)) distinct++;
+        }
+        Equal(true, innerRed > 0 && outerGreen > 0 && outerRed > 0, "inner 5H and outer weekly colors");
+        Equal(true, distinct > 0, "unavailable differs from zero quota");
+        using var icon = QuotaTrayIcon.Create(14, 100, new AppSettings(), size);
+        using var iconBitmap = icon.ToBitmap();
+        Equal(size, iconBitmap.Width, "owned icon remains valid after source disposal");
+    }
+}
+static void TestRoundedFrame()
+{
+    foreach (var width in new[] { 70, 124 })
+    foreach (var glass in new[] { false, true })
+    {
+        var bitmap = QuotaCardFrame.RenderFrame(width, 48, glass);
+        var stride = bitmap.PixelWidth * 4;
+        var pixels = new byte[stride * bitmap.PixelHeight];
+        bitmap.CopyPixels(pixels, stride, 0);
+        byte Alpha(int x, int y) => pixels[y * stride + x * 4 + 3];
+        Equal((byte)0, Alpha(0, 0), "outside corner transparent");
+        // This point is inside a circular radius-7 corner, but outside a 7px diagonal bevel.
+        Equal((byte)255, Alpha(14, 14), "round arc is not a chamfer");
+        for (var y = 0; y < 32; y++)
+        for (var x = 0; x < 32; x++)
+        {
+            Equal(Alpha(x, y), Alpha(bitmap.PixelWidth - 1 - x, y), "horizontal corner symmetry");
+            Equal(Alpha(x, y), Alpha(x, bitmap.PixelHeight - 1 - y), "vertical corner symmetry");
+        }
     }
 }
