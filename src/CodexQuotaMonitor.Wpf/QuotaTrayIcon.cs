@@ -1,7 +1,13 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Color = System.Windows.Media.Color;
+using Pen = System.Windows.Media.Pen;
+using PixelFormat = System.Drawing.Imaging.PixelFormat;
+using Point = System.Windows.Point;
 
 namespace CodexQuotaMonitor.Wpf;
 
@@ -22,43 +28,62 @@ public static class QuotaTrayIcon
     public static Bitmap RenderBitmap(double? fiveHour, double? weekly, AppSettings settings, int size)
     {
         size = Math.Clamp(size, 16, 256);
-        const int supersampling = 4;
-        using var large = new Bitmap(size * supersampling, size * supersampling, PixelFormat.Format32bppArgb);
-        using (var graphics = Graphics.FromImage(large))
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
         {
-            graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            graphics.ScaleTransform(size * supersampling / 16f, size * supersampling / 16f);
-            DrawRing(graphics, weekly, settings, 6.5f, 1.65f);
-            DrawRing(graphics, fiveHour, settings, 3.6f, 1.55f);
+            dc.PushTransform(new ScaleTransform(size / 16.0, size / 16.0));
+            DrawRing(dc, weekly, settings, 6.5, 1.65);
+            DrawRing(dc, fiveHour, settings, 3.6, 1.55);
+            dc.Pop();
         }
-        var bitmap = new Bitmap(size, size, PixelFormat.Format32bppArgb);
-        using (var graphics = Graphics.FromImage(bitmap))
+        // The shell needs an HICON; rasterize once at its requested size using WPF.
+        var source = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
+        source.Render(visual);
+        var bitmap = new Bitmap(size, size, PixelFormat.Format32bppPArgb);
+        try
         {
-            graphics.CompositingMode = CompositingMode.SourceCopy;
-            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            graphics.DrawImage(large, new Rectangle(0, 0, size, size));
+            var data = bitmap.LockBits(new Rectangle(0, 0, size, size),
+                ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+            try { source.CopyPixels(Int32Rect.Empty, data.Scan0, data.Stride * size, data.Stride); }
+            finally { bitmap.UnlockBits(data); }
+            return bitmap;
         }
-        return bitmap;
+        catch
+        {
+            bitmap.Dispose();
+            throw;
+        }
     }
 
-    private static void DrawRing(Graphics graphics, double? remaining, AppSettings settings, float radius, float stroke)
+    private static void DrawRing(DrawingContext dc, double? remaining, AppSettings settings, double radius, double stroke)
     {
-        var bounds = new RectangleF(8 - radius, 8 - radius, radius * 2, radius * 2);
-        using var track = new Pen(System.Drawing.Color.FromArgb(150, 111, 124, 141), stroke);
+        var center = new Point(8, 8);
+        var track = new Pen(new SolidColorBrush(Color.FromArgb(150, 111, 124, 141)), stroke);
         if (!remaining.HasValue || !double.IsFinite(remaining.Value))
         {
-            track.DashStyle = DashStyle.Dot;
-            graphics.DrawEllipse(track, bounds);
+            track.DashStyle = DashStyles.Dot;
+            dc.DrawEllipse(null, track, center, radius, radius);
             return;
         }
-        graphics.DrawEllipse(track, bounds);
-        var color = Formatting.ColorForRemaining(remaining, settings);
-        using var arc = new Pen(System.Drawing.Color.FromArgb(color.R, color.G, color.B), stroke)
-        { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        dc.DrawEllipse(null, track, center, radius, radius);
+        var arc = new Pen(new SolidColorBrush(Formatting.ColorForRemaining(remaining, settings)), stroke)
+        { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
         var percent = Math.Clamp(remaining.Value, 0, 100);
-        if (percent >= 100) graphics.DrawEllipse(arc, bounds);
-        else if (percent > 0) graphics.DrawArc(arc, bounds, -90, (float)(percent * 3.6));
+        if (percent >= 100) dc.DrawEllipse(null, arc, center, radius, radius);
+        else if (percent > 0)
+        {
+            var angle = percent / 100 * 2 * Math.PI;
+            var geometry = new StreamGeometry();
+            using (var path = geometry.Open())
+            {
+                path.BeginFigure(new Point(8, 8 - radius), isFilled: false, isClosed: false);
+                path.ArcTo(new Point(8 + radius * Math.Sin(angle), 8 - radius * Math.Cos(angle)),
+                    new System.Windows.Size(radius, radius), 0, percent > 50, SweepDirection.Clockwise,
+                    isStroked: true, isSmoothJoin: false);
+            }
+            geometry.Freeze();
+            dc.DrawGeometry(null, arc, geometry);
+        }
     }
 
     [DllImport("user32.dll")]

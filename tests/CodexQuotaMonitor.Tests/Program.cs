@@ -11,8 +11,8 @@ var tests = new (string Name, Action Body)[]
     ("taskbar overlay placement", TestTaskbarPlacement),
     ("floating placement and adaptive columns", TestFloatingLayout),
     ("transparent overlay corners", TestTransparentCorners),
-    ("dynamic tray rings", TestTrayRings),
-    ("rounded frame geometry", TestRoundedFrame),
+    ("dynamic tray rings", () => RunSta(TestTrayRings)),
+    ("rounded frame geometry", () => RunSta(TestRoundedFrame)),
     ("argument handling", TestArguments)
 };
 
@@ -27,7 +27,7 @@ foreach (var test in tests)
     }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"FAIL {test.Name}: {ex.Message}");
+        Console.Error.WriteLine($"FAIL {test.Name}: {ex}");
         return 1;
     }
 }
@@ -231,7 +231,7 @@ static void TestTransparentCorners()
                 Equal(false, frame.IsHitTestVisible, "frame does not block input");
                 foreach (var glassEnabled in new[] { false, true })
                 foreach (var baseWidth in new[] { 124, 70 })
-                foreach (var scale in new[] { .75, 1.0, 1.25, 1.5, 3.0 })
+                foreach (var scale in new[] { .5, .75, 1.0, 1.25, 1.5, 2.0, 3.0 })
                 foreach (double? remaining in new double?[] { 14, 96, 100, 0, null })
                 {
                     frame.GlassEnabled = glassEnabled;
@@ -350,6 +350,12 @@ static void TestTrayRings()
         using var reversed = QuotaTrayIcon.RenderBitmap(100, 14, new AppSettings(), size);
         using var empty = QuotaTrayIcon.RenderBitmap(0, 0, new AppSettings(), size);
         using var unavailable = QuotaTrayIcon.RenderBitmap(null, null, new AppSettings(), size);
+        using var quarter = QuotaTrayIcon.RenderBitmap(0, 25, new AppSettings(), size);
+        using var threeQuarters = QuotaTrayIcon.RenderBitmap(0, 75, new AppSettings(), size);
+        var bottom = threeQuarters.GetPixel(size / 2, (int)(14.5 * size / 16));
+        var quarterBottom = quarter.GetPixel(size / 2, (int)(14.5 * size / 16));
+        Equal(true, bottom.G > bottom.R * 1.4, "major arc covers bottom of weekly ring");
+        Equal(true, Math.Abs(quarterBottom.G - quarterBottom.R) < 30, "quarter arc leaves bottom as track");
         Equal((byte)0, bitmap.GetPixel(0, 0).A, "transparent tray corner");
         Equal((byte)0, bitmap.GetPixel(size / 2, size / 2).A, "open ring center");
         var innerRed = 0; var outerGreen = 0; var outerRed = 0; var distinct = 0;
@@ -371,12 +377,31 @@ static void TestTrayRings()
         Equal(size, iconBitmap.Width, "owned icon remains valid after source disposal");
     }
 }
+static void RunSta(Action action)
+{
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+        try { action(); }
+        catch (Exception ex) { failure = ex; }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (failure is not null) throw new InvalidOperationException("WPF rendering regression", failure);
+}
+
 static void TestRoundedFrame()
 {
     foreach (var width in new[] { 70, 124 })
     foreach (var glass in new[] { false, true })
     {
-        var bitmap = QuotaCardFrame.RenderFrame(width, 48, glass);
+        var frame = new QuotaCardFrame { Width = width, Height = 48, GlassEnabled = glass };
+        frame.Measure(new System.Windows.Size(width, 48));
+        frame.Arrange(new System.Windows.Rect(0, 0, width, 48));
+        var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+            width * 4, 48 * 4, 384, 384, System.Windows.Media.PixelFormats.Pbgra32);
+        bitmap.Render(frame);
         var stride = bitmap.PixelWidth * 4;
         var pixels = new byte[stride * bitmap.PixelHeight];
         bitmap.CopyPixels(pixels, stride, 0);
@@ -384,11 +409,27 @@ static void TestRoundedFrame()
         Equal((byte)0, Alpha(0, 0), "outside corner transparent");
         // This point is inside a circular radius-7 corner, but outside a 7px diagonal bevel.
         Equal((byte)255, Alpha(14, 14), "round arc is not a chamfer");
+        var antialiasedPixels = 0;
         for (var y = 0; y < 32; y++)
-        for (var x = 0; x < 32; x++)
         {
-            Equal(Alpha(x, y), Alpha(bitmap.PixelWidth - 1 - x, y), "horizontal corner symmetry");
-            Equal(Alpha(x, y), Alpha(x, bitmap.PixelHeight - 1 - y), "vertical corner symmetry");
+            var horizontalCoverageDifference = 0;
+            var verticalCoverageDifference = 0;
+            for (var x = 0; x < 32; x++)
+            {
+                var alpha = Alpha(x, y);
+                if (alpha is > 0 and < 255) antialiasedPixels++;
+                var distance = Math.Sqrt(Math.Pow(x + .5 - 32, 2) + Math.Pow(y + .5 - 32, 2));
+                // Radius 7 DIP at 384 DPI is 28 pixels. Only its one-pixel boundary may blend.
+                if (distance < 27) Equal((byte)255, alpha, "opaque circular corner interior");
+                if (distance > 29) Equal((byte)0, alpha, "transparent circular corner exterior");
+                horizontalCoverageDifference += alpha - Alpha(bitmap.PixelWidth - 1 - x, y);
+                verticalCoverageDifference += Alpha(y, x) - Alpha(y, bitmap.PixelHeight - 1 - x);
+            }
+            // Native WPF coverage is quantized; compare silhouette coverage within one pixel,
+            // rather than requiring the old analytical rasterizer's identical alpha bytes.
+            Near(0, horizontalCoverageDifference, 255, "horizontal corner coverage symmetry");
+            Near(0, verticalCoverageDifference, 255, "vertical corner coverage symmetry");
         }
+        Equal(true, antialiasedPixels > 0, "native antialiasing blends corner edges");
     }
 }
