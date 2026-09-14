@@ -133,7 +133,7 @@ Start-CodexQuotaMonitorNative.cmd --once --no-tray
 
 ## 构建发布包
 
-版本号统一维护在 `Directory.Build.props`，当前待发布版本为 **1.3.0**。本地构建运行：
+版本号统一维护在 `Directory.Build.props`，当前版本为 **1.3.1**。本地构建运行：
 
 ~~~powershell
 pwsh -NoProfile -File .\Build-Release.ps1
@@ -143,9 +143,9 @@ pwsh -NoProfile -File .\Build-Release.ps1
 
 ~~~text
 publish\win-x64-self-contained\CodexQuotaMonitor.Wpf.exe
-publish\installer\CodexQuotaMonitor-Setup-1.3.0.msi
+publish\installer\CodexQuotaMonitor-Setup-1.3.1.msi
 publish\release\CodexQuotaMonitor.Wpf.exe
-publish\release\CodexQuotaMonitor-Setup-1.3.0.msi
+publish\release\CodexQuotaMonitor-Setup-1.3.1.msi
 publish\release\SHA256SUMS
 ~~~
 
@@ -164,31 +164,34 @@ dotnet run --project .\tests\CodexQuotaMonitor.Tests\CodexQuotaMonitor.Tests.csp
 
 | 触发方式 | 结果 |
 | --- | --- |
-| 推送 `native-wpf`、向该分支提交 PR | 测试、打包，在 Actions 中保存 14 天的构建附件 |
-| Actions → Build and release → Run workflow | 手动测试和打包，不创建 Release |
-| 推送 `v主版本.次版本.修订号` 标签 | 完成上述检查，再创建带三个附件的 Release 草稿 |
+| 普通分支推送、提交 PR | 不触发构建 |
+| 推送新的 `v主版本.次版本.修订号` 标签 | 云端测试、打包，保存 14 天的构建附件，并创建带三个附件的 Release 草稿 |
+
+工作流只监听 `v*` 标签推送，不提供 **Run workflow** 手动构建入口。标签格式和版本号会在构建开始时严格校验；同一次推送包含分支更新和一个新版本标签时，只有标签触发构建。
 
 首次使用：在仓库 **Settings → Actions → General** 确认已启用 GitHub Actions，并允许工作流使用 `actions/checkout`、`actions/setup-dotnet`、`actions/upload-artifact`、`actions/download-artifact` 和 `actions/github-script`。工作流使用内置 `GITHUB_TOKEN`；只有创建草稿的 job 申请 `contents: write`，无需配置个人 PAT、Codex token 或其他 Secret。组织策略如禁止写权限，需要仓库管理员放行。
 
-发布 **v1.3.0** 的操作：
+发布新版本的操作（所有 Git 命令都在本地项目目录执行，构建与打包由 GitHub 云端完成）：
 
-1. 将本次工作流、版本文件、脚本和发布说明提交并推送到 `native-wpf`。在 [Actions](https://github.com/xiaominga/CodexQuotaMonitor/actions) 确认该提交的 **Build and release** 成功。可先下载 `CodexQuotaMonitor-1.3.0-win-x64` 附件验证实际运行和 MSI 升级。
-2. 在包含这些文件的提交上创建并推送标签（以下命令在项目目录执行，每条成功后再执行下一条）：
+1. 更新 `Directory.Build.props` 的版本号，新增对应的 `release-notes/v<版本号>.md`，将这些文件、工作流和源码提交到 `native-wpf`。此时可以普通推送保存代码，普通推送不会构建；也可以留到下一步与新标签一起推送。
+2. 在包含上述文件的提交上创建新标签，并一次推送分支与标签。下面的版本号自动读取自 `Directory.Build.props`，每条命令成功后再执行下一条：
 
    ~~~powershell
    git switch native-wpf
-   git pull --ff-only origin native-wpf
-   git tag -a v1.3.0 -m "Release v1.3.0"
-   git push origin v1.3.0
+   $version = ./scripts/Get-ReleaseVersion.ps1
+   git tag -a "v$version" -m "Release v$version"
+   git push --atomic origin native-wpf "refs/tags/v$version"
    ~~~
 
-3. 等待标签触发的 Actions 成功，在 [Releases](https://github.com/xiaominga/CodexQuotaMonitor/releases) 打开 **v1.3.0 草稿**，核对说明和 EXE、MSI、SHA256SUMS 三个附件，点击 **Publish release**。只有此时版本才正式公开。
+3. 在 [Actions](https://github.com/xiaominga/CodexQuotaMonitor/actions) 查看对应版本标签的 **Build and release**，等待 `build` 和 `release` 成功；在 [Releases](https://github.com/xiaominga/CodexQuotaMonitor/releases) 打开该版本草稿，检查实际运行效果、MSI 升级、说明及三个附件，点击 **Publish release**。只有此时版本才正式公开。
 
-标签必须与 `Directory.Build.props` 中的版本完全一致，并指向 `native-wpf` 分支历史中的提交；发布说明来自 `release-notes/v1.3.0.md`。后续发布只需更新 `Directory.Build.props`、新增对应 `release-notes/v<版本号>.md`，再按相同步骤提交、测试和推送新标签。
+标签必须与它指向的提交中的 `Directory.Build.props` 版本完全一致，并指向 `native-wpf` 分支历史中的提交；发布说明也从该提交的 `release-notes/v<版本号>.md` 读取。工作流配置同样取自标签指向的提交，因此修改分支上的工作流不会改变已有标签的构建行为。
+
+`v1.3.0` 标签已经存在，不能再次使用上面的命令创建它。重复推送已有标签不会触发新构建；若要让这次工作流修改参与后续发布，需要提交修改、更新版本和说明，再创建新的版本标签，不要删除或强制移动旧标签。
 
 失败处理：测试或打包失败不会创建草稿；上传失败可能留下不完整草稿，排除网络或权限问题后可在 Actions 中 **Re-run failed jobs**，工作流会补传或替换草稿附件。若需要修改源码，应提交修复后使用新版本和标签。已公开 Release 的附件不会被此工作流覆盖，也不要强制移动旧标签。
 
-下载后可用 `Get-FileHash .\CodexQuotaMonitor.Wpf.exe -Algorithm SHA256` 和 `Get-FileHash .\CodexQuotaMonitor-Setup-1.3.0.msi -Algorithm SHA256` 对照 `SHA256SUMS`。构建与包结构检查不替代真实桌面显示、账号额度查询或从旧版安装升级的验证。
+下载后可用 `Get-FileHash .\CodexQuotaMonitor.Wpf.exe -Algorithm SHA256` 和 `Get-FileHash .\CodexQuotaMonitor-Setup-1.3.1.msi -Algorithm SHA256` 对照 `SHA256SUMS`。构建与包结构检查不替代真实桌面显示、账号额度查询或从旧版安装升级的验证。
 
 ## 分支关系
 

@@ -2,11 +2,7 @@ name: Build and release
 
 on:
   push:
-    branches: [native-wpf]
     tags: ['v*']
-  pull_request:
-    branches: [native-wpf]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -37,13 +33,9 @@ jobs:
         id: version
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            $version = & ./scripts/Get-ReleaseVersion.ps1 -Tag $env:GITHUB_REF_NAME
-            git merge-base --is-ancestor HEAD origin/native-wpf
-            if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on native-wpf.' }
-          } else {
-            $version = & ./scripts/Get-ReleaseVersion.ps1
-          }
+          $version = & ./scripts/Get-ReleaseVersion.ps1 -Tag $env:GITHUB_REF_NAME
+          git merge-base --is-ancestor HEAD origin/native-wpf
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on native-wpf.' }
           if (-not (Test-Path -LiteralPath "release-notes/v$version.md" -PathType Leaf)) {
             throw "Missing release-notes/v$version.md."
           }
