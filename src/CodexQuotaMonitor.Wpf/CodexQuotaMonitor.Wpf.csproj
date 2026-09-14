@@ -5,7 +5,6 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <ApplicationIcon>Assets\CodexQuotaMonitor.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.1.1</Version>
     <Authors>DiMY-CN</Authors>
     <Product>Codex Quota Monitor</Product>
     <Description>Compact taskbar quota overlay for Windows desktop Codex.</Description>

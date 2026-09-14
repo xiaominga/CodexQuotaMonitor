@@ -52,7 +52,7 @@
 
 ## 安装与运行
 
-推荐从 GitHub Releases 下载 `CodexQuotaMonitor-Setup-1.1.1.msi`，双击即可安装。安装向导支持修改安装目录，并提供以下选项：
+推荐从 [GitHub Releases](https://github.com/xiaominga/CodexQuotaMonitor/releases) 下载最新版本的 `CodexQuotaMonitor-Setup-<版本号>.msi`，双击即可安装。安装向导支持修改安装目录，并提供以下选项：
 
 - **Create a desktop shortcut**：创建桌面快捷方式，默认选中。
 - **Launch Codex Quota Monitor**：安装完成后立即启动，在完成页显示，默认不选中。
@@ -133,7 +133,7 @@ Start-CodexQuotaMonitorNative.cmd --once --no-tray
 
 ## 构建发布包
 
-运行：
+版本号统一维护在 `Directory.Build.props`，当前待发布版本为 **1.3.0**。本地构建运行：
 
 ~~~powershell
 pwsh -NoProfile -File .\Build-Release.ps1
@@ -143,10 +143,13 @@ pwsh -NoProfile -File .\Build-Release.ps1
 
 ~~~text
 publish\win-x64-self-contained\CodexQuotaMonitor.Wpf.exe
-publish\installer\CodexQuotaMonitor-Setup-1.1.1.msi
+publish\installer\CodexQuotaMonitor-Setup-1.3.0.msi
+publish\release\CodexQuotaMonitor.Wpf.exe
+publish\release\CodexQuotaMonitor-Setup-1.3.0.msi
+publish\release\SHA256SUMS
 ~~~
 
-构建机需要 .NET 8 SDK，并会通过 NuGet 获取 WiX；WiX 只用于生成 MSI，终端用户不需要安装 WiX。
+构建机需要 Windows、PowerShell 7 和 .NET 8 SDK（或可构建 .NET 8 项目的更新 SDK），并会通过 NuGet 获取 WiX；WiX 只用于生成 MSI，终端用户不需要安装 WiX。脚本核对 EXE/MSI 版本、MSI 升级标识和 SHA256，`publish/release` 只包含三个发布附件。可使用 `-OutputRoot .\artifacts\package-check` 指定仓库内的独立输出目录；兼容保留的 `-Version` 参数必须与 `Directory.Build.props` 一致。
 
 基础验证命令：
 
@@ -154,6 +157,38 @@ publish\installer\CodexQuotaMonitor-Setup-1.1.1.msi
 dotnet build .\src\CodexQuotaMonitor.Wpf\CodexQuotaMonitor.Wpf.csproj -c Release
 dotnet run --project .\tests\CodexQuotaMonitor.Tests\CodexQuotaMonitor.Tests.csproj -c Release
 ~~~
+
+## GitHub 自动构建与发布
+
+工作流为 `.github/workflows/build-release.yml`，运行在 `windows-2022`，安装 .NET 8 SDK。所有构建先运行回归测试，再打包和验证 EXE、MSI 与 SHA256；不需要 Codex 登录信息，也不进行真实额度查询。
+
+| 触发方式 | 结果 |
+| --- | --- |
+| 推送 `native-wpf`、向该分支提交 PR | 测试、打包，在 Actions 中保存 14 天的构建附件 |
+| Actions → Build and release → Run workflow | 手动测试和打包，不创建 Release |
+| 推送 `v主版本.次版本.修订号` 标签 | 完成上述检查，再创建带三个附件的 Release 草稿 |
+
+首次使用：在仓库 **Settings → Actions → General** 确认已启用 GitHub Actions，并允许工作流使用 `actions/checkout`、`actions/setup-dotnet`、`actions/upload-artifact`、`actions/download-artifact` 和 `actions/github-script`。工作流使用内置 `GITHUB_TOKEN`；只有创建草稿的 job 申请 `contents: write`，无需配置个人 PAT、Codex token 或其他 Secret。组织策略如禁止写权限，需要仓库管理员放行。
+
+发布 **v1.3.0** 的操作：
+
+1. 将本次工作流、版本文件、脚本和发布说明提交并推送到 `native-wpf`。在 [Actions](https://github.com/xiaominga/CodexQuotaMonitor/actions) 确认该提交的 **Build and release** 成功。可先下载 `CodexQuotaMonitor-1.3.0-win-x64` 附件验证实际运行和 MSI 升级。
+2. 在包含这些文件的提交上创建并推送标签（以下命令在项目目录执行，每条成功后再执行下一条）：
+
+   ~~~powershell
+   git switch native-wpf
+   git pull --ff-only origin native-wpf
+   git tag -a v1.3.0 -m "Release v1.3.0"
+   git push origin v1.3.0
+   ~~~
+
+3. 等待标签触发的 Actions 成功，在 [Releases](https://github.com/xiaominga/CodexQuotaMonitor/releases) 打开 **v1.3.0 草稿**，核对说明和 EXE、MSI、SHA256SUMS 三个附件，点击 **Publish release**。只有此时版本才正式公开。
+
+标签必须与 `Directory.Build.props` 中的版本完全一致，并指向 `native-wpf` 分支历史中的提交；发布说明来自 `release-notes/v1.3.0.md`。后续发布只需更新 `Directory.Build.props`、新增对应 `release-notes/v<版本号>.md`，再按相同步骤提交、测试和推送新标签。
+
+失败处理：测试或打包失败不会创建草稿；上传失败可能留下不完整草稿，排除网络或权限问题后可在 Actions 中 **Re-run failed jobs**，工作流会补传或替换草稿附件。若需要修改源码，应提交修复后使用新版本和标签。已公开 Release 的附件不会被此工作流覆盖，也不要强制移动旧标签。
+
+下载后可用 `Get-FileHash .\CodexQuotaMonitor.Wpf.exe -Algorithm SHA256` 和 `Get-FileHash .\CodexQuotaMonitor-Setup-1.3.0.msi -Algorithm SHA256` 对照 `SHA256SUMS`。构建与包结构检查不替代真实桌面显示、账号额度查询或从旧版安装升级的验证。
 
 ## 分支关系
 

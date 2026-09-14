@@ -1,15 +1,25 @@
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '1.1.1'
+    [string]$Version,
+    [string]$OutputRoot = (Join-Path $PSScriptRoot 'publish')
 )
 
 $ErrorActionPreference = 'Stop'
 $root = [System.IO.Path]::GetFullPath($PSScriptRoot)
 $rootPrefix = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$sourceVersion = & (Join-Path $root 'scripts\Get-ReleaseVersion.ps1')
+if ($PSBoundParameters.ContainsKey('Version') -and $Version -cne $sourceVersion) {
+    throw "Requested version '$Version' must match Directory.Build.props version '$sourceVersion'."
+}
+$Version = $sourceVersion
+$OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
+if (-not $OutputRoot.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "OutputRoot must be a directory inside the project: $OutputRoot"
+}
 $appProject = Join-Path $root 'src\CodexQuotaMonitor.Wpf\CodexQuotaMonitor.Wpf.csproj'
 $installerProject = Join-Path $root 'installer\CodexQuotaMonitor.Installer.wixproj'
-$appOutput = Join-Path $root 'publish\win-x64-self-contained'
-$installerOutput = Join-Path $root 'publish\installer'
+$appOutput = Join-Path $OutputRoot 'win-x64-self-contained'
+$installerOutput = Join-Path $OutputRoot 'installer'
+$releaseOutput = Join-Path $OutputRoot 'release'
 
 function Remove-ProjectDirectory {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -23,7 +33,7 @@ function Remove-ProjectDirectory {
     }
 }
 
-foreach ($path in @($appOutput, $installerOutput)) {
+foreach ($path in @($appOutput, $installerOutput, $releaseOutput)) {
     Remove-ProjectDirectory -Path $path
     New-Item -ItemType Directory -Path $path -Force | Out-Null
 }
@@ -79,3 +89,13 @@ finally {
 
 Write-Output "Application: $(Join-Path $appOutput 'CodexQuotaMonitor.Wpf.exe')"
 Write-Output "Installer:   $target"
+
+Copy-Item -LiteralPath (Join-Path $appOutput 'CodexQuotaMonitor.Wpf.exe') -Destination $releaseOutput
+Copy-Item -LiteralPath $target -Destination $releaseOutput
+$checksums = foreach ($file in Get-ChildItem -LiteralPath $releaseOutput -File | Sort-Object Name) {
+    $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $($file.Name)"
+}
+$checksums | Set-Content -LiteralPath (Join-Path $releaseOutput 'SHA256SUMS') -Encoding ascii
+& (Join-Path $root 'scripts\Test-ReleasePackage.ps1') -Path $releaseOutput -Version $Version
+Write-Output "Release assets: $releaseOutput"
