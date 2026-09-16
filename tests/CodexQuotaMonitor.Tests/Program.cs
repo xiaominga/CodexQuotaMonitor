@@ -344,37 +344,173 @@ static void Near(double expected, double actual, double tolerance, string label)
 
 static void TestTrayRings()
 {
-    foreach (var size in new[] { 16, 20, 24, 32 })
+    foreach (var size in new[] { 16, 20, 24, 32, 128 })
+    foreach (var light in new[] { false, true })
     {
-        using var bitmap = QuotaTrayIcon.RenderBitmap(14, 100, new AppSettings(), size);
-        using var reversed = QuotaTrayIcon.RenderBitmap(100, 14, new AppSettings(), size);
-        using var empty = QuotaTrayIcon.RenderBitmap(0, 0, new AppSettings(), size);
-        using var unavailable = QuotaTrayIcon.RenderBitmap(null, null, new AppSettings(), size);
-        using var quarter = QuotaTrayIcon.RenderBitmap(0, 25, new AppSettings(), size);
-        using var threeQuarters = QuotaTrayIcon.RenderBitmap(0, 75, new AppSettings(), size);
+        using var missing = QuotaTrayIcon.RenderBitmap(null, double.NaN, new AppSettings(), size, light);
+        var quadrants = new long[4];
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+            quadrants[(x >= size / 2 ? 1 : 0) + (y >= size / 2 ? 2 : 0)] += missing.GetPixel(x, y).A;
+        Equal(true, quadrants.Max() - quadrants.Min() <= quadrants.Sum() * .02 + 255,
+            "unavailable arcs have symmetric quadrant coverage");
+        if (size != 128) continue;
+        foreach (var radius in new[] { 6.17, 3.29 })
+        for (var direction = 0; direction < 8; direction++)
+        {
+            var angle = direction * Math.PI / 4;
+            var x = (int)((8 + radius * 1.09 * Math.Sin(angle)) * size / 16);
+            var y = (int)((8 - radius * 1.09 * Math.Cos(angle)) * size / 16);
+            var alpha = missing.GetPixel(x, y).A;
+            if (direction % 2 == 0) Equal((byte)255, alpha, "unavailable arcs centered on cardinal directions");
+            else Equal((byte)0, alpha, "unavailable gaps centered on diagonals");
+        }
+    }
+    // Compare radial extents, independent of segment placement and palette. This catches
+    // either state changing thickness or radius without the other following it.
+    using (var segmented = QuotaTrayIcon.RenderBitmap(null, null, new AppSettings(), 128))
+    using (var solid = QuotaTrayIcon.RenderBitmap(100, 100, new AppSettings(), 128))
+    {
+        static (double Inner, double Outer) RadialBounds(System.Drawing.Bitmap image, bool outer)
+        {
+            var min = double.MaxValue; var max = 0.0;
+            for (var y = 0; y < image.Height; y++)
+            for (var x = 0; x < image.Width; x++)
+            {
+                var dx = (x + .5) * 16 / image.Width - 8;
+                var dy = (y + .5) * 16 / image.Height - 8;
+                var r = Math.Sqrt(dx * dx + dy * dy);
+                if (image.GetPixel(x, y).A < 128 || (r > 5) != outer) continue;
+                min = Math.Min(min, r); max = Math.Max(max, r);
+            }
+            return (min, max);
+        }
+        foreach (var outer in new[] { false, true })
+        {
+            var segments = RadialBounds(segmented, outer); var line = RadialBounds(solid, outer);
+            Near(line.Inner, segments.Inner, .15, "segmented and solid rings share inner boundary");
+            Near(line.Outer, segments.Outer, .15, "segmented and solid rings share outer boundary");
+        }
+    }
+    foreach (var size in new[] { 16, 24, 32, 128 })
+    foreach (var light in new[] { false, true })
+    {
+        var settings = new AppSettings { RedThreshold = 0, AmberThreshold = 0 };
+        var expected = Formatting.ColorFromHex(light ? "#00AD68" : "#55F2A5");
+        using var quarter = QuotaTrayIcon.RenderBitmap(null, 25, settings, size, light);
+        var checkedEdges = 0;
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var dx = ((x + .5) * 16 / size - 8) / 1.09;
+            var dy = ((y + .5) * 16 / size - 8) / 1.09;
+            var pixel = quarter.GetPixel(x, y);
+            // Outer arc, away from the rounded endpoints. Its antialiased edges must
+            // contain only progress color, not a gray track underneath.
+            if (dx <= 1.5 || dy >= -1.5 || dx * dx + dy * dy < 25 || pixel.A < 40) continue;
+            Near(expected.R, pixel.R, 8, "progress edge has no gray red-channel contamination");
+            Near(expected.G, pixel.G, 8, "progress edge has no gray green-channel contamination");
+            Near(expected.B, pixel.B, 8, "progress edge has no gray blue-channel contamination");
+            checkedEdges++;
+        }
+        Equal(true, checkedEdges > 0, "sampled visible progress edge pixels");
+        foreach (var value in new[] { 0.0, .01, 1, 99, 99.99, 100 })
+        {
+            using var image = QuotaTrayIcon.RenderBitmap(value, value, settings, size, light);
+            Equal((byte)0, image.GetPixel(0, 0).A, "boundary states preserve transparent corners");
+            Equal(value == 0, image.GetPixel(size / 2, size / 2).A > 80,
+                "only zero quota has central exhausted marker");
+        }
+    }
+    foreach (var size in new[] { 16, 20, 24, 32 })
+    foreach (var lightTaskbar in new[] { false, true })
+    {
+        using var bitmap = QuotaTrayIcon.RenderBitmap(14, 100, new AppSettings(), size, lightTaskbar);
+        using var reversed = QuotaTrayIcon.RenderBitmap(100, 14, new AppSettings(), size, lightTaskbar);
+        using var empty = QuotaTrayIcon.RenderBitmap(0, 0, new AppSettings(), size, lightTaskbar);
+        using var unavailable = QuotaTrayIcon.RenderBitmap(null, null, new AppSettings(), size, lightTaskbar);
+        using var quarter = QuotaTrayIcon.RenderBitmap(0, 25, new AppSettings(), size, lightTaskbar);
+        using var threeQuarters = QuotaTrayIcon.RenderBitmap(0, 75, new AppSettings(), size, lightTaskbar);
+        using var outerEmpty = QuotaTrayIcon.RenderBitmap(100, 0, new AppSettings(), size, lightTaskbar);
+        using var invalid = QuotaTrayIcon.RenderBitmap(double.NaN, double.PositiveInfinity, new AppSettings(), size, lightTaskbar);
+        Equal(true, empty.GetPixel(size / 2, size / 2).A > 80, "both exhausted show minus marker");
+        Equal(true, quarter.GetPixel(size / 2, size / 2).A > 80, "inner exhausted shows minus marker");
+        Equal(true, outerEmpty.GetPixel(size / 2, size / 2).A > 80, "outer exhausted shows minus marker");
+        Equal((byte)0, unavailable.GetPixel(size / 2, size / 2).A, "missing data has no exhausted marker");
+        Equal((byte)0, invalid.GetPixel(size / 2, size / 2).A, "nonfinite data has no exhausted marker");
         var bottom = threeQuarters.GetPixel(size / 2, (int)(14.5 * size / 16));
         var quarterBottom = quarter.GetPixel(size / 2, (int)(14.5 * size / 16));
-        Equal(true, bottom.G > bottom.R * 1.4, "major arc covers bottom of weekly ring");
+        Equal(true, bottom.G > bottom.R + 30, "major arc covers bottom of weekly ring");
         Equal(true, Math.Abs(quarterBottom.G - quarterBottom.R) < 30, "quarter arc leaves bottom as track");
         Equal((byte)0, bitmap.GetPixel(0, 0).A, "transparent tray corner");
         Equal((byte)0, bitmap.GetPixel(size / 2, size / 2).A, "open ring center");
         var innerRed = 0; var outerGreen = 0; var outerRed = 0; var distinct = 0;
+        var red = Formatting.ColorFromHex(lightTaskbar ? "#FF4059" : "#FFB2BC");
+        var green = Formatting.ColorFromHex(lightTaskbar ? "#00AD68" : "#55F2A5");
+        static bool Matches(System.Drawing.Color pixel, System.Windows.Media.Color expected) =>
+            pixel.A > 80 && Math.Abs(pixel.R - expected.R) <= 10 &&
+            Math.Abs(pixel.G - expected.G) <= 10 && Math.Abs(pixel.B - expected.B) <= 10;
         for (var y = 0; y < size; y++)
         for (var x = 0; x < size; x++)
         {
             var pixel = bitmap.GetPixel(x, y);
             var distance = Math.Sqrt(Math.Pow((x + .5) * 16 / size - 8, 2) + Math.Pow((y + .5) * 16 / size - 8, 2));
-            if (pixel.A > 80 && distance < 5 && pixel.R > pixel.G * 1.4) innerRed++;
-            if (pixel.A > 80 && distance > 5 && pixel.G > pixel.R * 1.4) outerGreen++;
+            if (distance < 5 && Matches(pixel, red)) innerRed++;
+            if (distance > 5 && Matches(pixel, green)) outerGreen++;
             var other = reversed.GetPixel(x, y);
-            if (other.A > 80 && distance > 5 && other.R > other.G * 1.4) outerRed++;
+            if (distance > 5 && Matches(other, red)) outerRed++;
             if (empty.GetPixel(x, y) != unavailable.GetPixel(x, y)) distinct++;
         }
         Equal(true, innerRed > 0 && outerGreen > 0 && outerRed > 0, "inner 5H and outer weekly colors");
         Equal(true, distinct > 0, "unavailable differs from zero quota");
-        using var icon = QuotaTrayIcon.Create(14, 100, new AppSettings(), size);
+        using var icon = QuotaTrayIcon.Create(14, 100, new AppSettings(), size, lightTaskbar);
         using var iconBitmap = icon.ToBitmap();
         Equal(size, iconBitmap.Width, "owned icon remains valid after source disposal");
+    }
+    foreach (var lightTaskbar in new[] { false, true })
+    {
+        var settings = new AppSettings { RedThreshold = 20, AmberThreshold = 60 };
+        // Sample well inside strokes at high resolution to avoid edge coverage differences.
+        foreach (var remaining in new[] { 19.0, 20.0, 59.0, 60.0, 100.0 })
+        {
+            using var image = QuotaTrayIcon.RenderBitmap(remaining, remaining, settings, 128, lightTaskbar);
+            var expected = Formatting.ColorFromHex(remaining < 20
+                ? (lightTaskbar ? "#FF4059" : "#FFB2BC")
+                : remaining < 60 ? (lightTaskbar ? "#FFC400" : "#FFF36A")
+                : (lightTaskbar ? "#00AD68" : "#55F2A5"));
+            foreach (var y in new[] { 12, 35 })
+            {
+                var actual = image.GetPixel(66, y);
+                Equal(expected.R, actual.R, "quota arc red channel respects custom thresholds");
+                Equal(expected.G, actual.G, "quota arc green channel respects custom thresholds");
+                Equal(expected.B, actual.B, "quota arc blue channel respects custom thresholds");
+            }
+        }
+        using var singleEmpty = QuotaTrayIcon.RenderBitmap(0, 8, settings, 128, lightTaskbar);
+        var track = singleEmpty.GetPixel(64, 116);
+        Equal((byte)255, track.A, "track is opaque");
+        Equal((byte)(lightTaskbar ? 52 : 98), track.R, "track adapts to taskbar theme");
+        foreach (var remaining in new[] { 19.0, 20.0, 60.0 })
+        {
+            using var image = QuotaTrayIcon.RenderBitmap(remaining, remaining, settings, 128, lightTaskbar);
+            var progress = image.GetPixel(66, 12);
+            static double Luminance(System.Drawing.Color color)
+            {
+                static double Linear(byte channel)
+                {
+                    var value = channel / 255.0;
+                    return value <= .04045 ? value / 12.92 : Math.Pow((value + .055) / 1.055, 2.4);
+                }
+                return .2126 * Linear(color.R) + .7152 * Linear(color.G) + .0722 * Linear(color.B);
+            }
+            var a = Luminance(progress); var b = Luminance(track);
+            Equal(true, (Math.Max(a, b) + .05) / (Math.Min(a, b) + .05) >= (!lightTaskbar && remaining == 20 ? 4.5 : 3),
+                "dark-theme yellow retains 4.5:1 contrast; other progress colors retain at least 3:1");
+        }
+        var exhausted = singleEmpty.GetPixel(64, 92);
+        Equal((byte)207, exhausted.R, "only exhausted ring uses muted red");
+        Equal((byte)119, exhausted.G, "exhausted track green channel");
+        Equal((byte)131, exhausted.B, "exhausted track blue channel");
     }
 }
 static void RunSta(Action action)

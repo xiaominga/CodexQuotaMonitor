@@ -27,7 +27,7 @@ public partial class MainWindow : Window
     private readonly List<Forms.ToolStripMenuItem> _quotaIntervalItems = new();
     private Forms.NotifyIcon? _notifyIcon;
     private System.Drawing.Icon? _trayIcon;
-    private (double? FiveHour, double? Weekly, double Red, double Amber, int Size)? _trayVisual;
+    private (double? FiveHour, double? Weekly, double Red, double Amber, int Size, bool LightTaskbar)? _trayVisual;
     private AppSettings _settings;
     private IntPtr _hwnd;
     private QuotaSnapshot? _lastQuota;
@@ -259,7 +259,8 @@ public partial class MainWindow : Window
 
     private System.Drawing.Icon LoadTrayIcon()
     {
-        _trayIcon = QuotaTrayIcon.Create(null, null, _settings, Forms.SystemInformation.SmallIconSize.Width);
+        _trayIcon = QuotaTrayIcon.Create(null, null, _settings, Forms.SystemInformation.SmallIconSize.Width,
+            QuotaTrayIcon.UsesLightTaskbar());
         return _trayIcon;
     }
 
@@ -267,11 +268,12 @@ public partial class MainWindow : Window
     {
         if (_notifyIcon is null) return;
         var state = (_lastQuota?.FiveHour?.RemainingPercent, _lastQuota?.Weekly?.RemainingPercent,
-            _settings.RedThreshold, _settings.AmberThreshold, Forms.SystemInformation.SmallIconSize.Width);
+            _settings.RedThreshold, _settings.AmberThreshold, Forms.SystemInformation.SmallIconSize.Width,
+            QuotaTrayIcon.UsesLightTaskbar());
         if (_trayVisual == state) return;
         try
         {
-            var next = QuotaTrayIcon.Create(state.Item1, state.Item2, _settings, state.Item5);
+            var next = QuotaTrayIcon.Create(state.Item1, state.Item2, _settings, state.Item5, state.Item6);
             try { _notifyIcon.Icon = next; }
             catch { next.Dispose(); throw; }
             var previous = _trayIcon;
